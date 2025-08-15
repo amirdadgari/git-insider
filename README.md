@@ -3,7 +3,7 @@
 Git Insider is an Express-based web app that gives actionable insights into your Git repositories, with user management, API tokens, and a built-in GraphQL and REST API. It includes a single-page UI powered by Tailwind CSS.
 
 ## Features
-- Work Spaces: save root folders and scan for repositories, then aggregate analytics across all saved spaces
+- WorkSpaces: save root folders and scan for repositories, then aggregate analytics across all saved spaces
 - Git analytics: commits, authors, and repository insights via REST and GraphQL
 - User management: admin panel for users and permissions
 - API tokens: create/revoke tokens and use X-API-Key for API calls

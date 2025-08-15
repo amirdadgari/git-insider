@@ -120,7 +120,7 @@ Notes:
   - All distinct git users across repos.
 
 - GET `/api/git/workspaces`
-  - List saved Work Spaces.
+  - List saved WorkSpaces.
 
 - GET `/api/git/workspaces/repositories`
   - Query: `workspaces?=1,2`, `maxDepth?`, `exclude?=dir1,dir2`, `followSymlinks?=true|false`

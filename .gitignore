@@ -30,3 +30,5 @@ build/
 
 # Local runtime files
 .tmp/
+
+docker-compose.yml

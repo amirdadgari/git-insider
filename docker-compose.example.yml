@@ -1,0 +1,46 @@
+version: '3.8'
+
+# Copy this file to docker-compose.yml and customize values before deploying.
+# Tip: set strong secrets for JWT_SECRET and admin credentials.
+services:
+  git-insider:
+    # Option A: Build from local Dockerfile (default)
+    build: .
+    # Option B: Use a prebuilt image instead of build (uncomment and set a tag)
+    # image: your-dockerhub-user/git-insider:latest
+
+    container_name: git-insider
+    ports:
+      - "3201:3201"  # host:container
+
+    environment:
+      # Runtime environment
+      - NODE_ENV=production
+      - PORT=3201
+      # Security & auth
+      - JWT_SECRET=change_me_in_production
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=change_me
+      # Database path inside container (must align with mounted volume below)
+      - DB_PATH=/usr/src/app/database/app.db
+      # Optional: path for scanning repos you mount (feature may be unused)
+      # - GIT_REPOS_PATH=/usr/src/app/repos
+
+    volumes:
+      # Persist SQLite database on host
+      - ./database:/usr/src/app/database
+      # Optional: mount host folders containing git repos to analyze
+      - ./repos:/usr/src/app/repos
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    name: git-insider-network
