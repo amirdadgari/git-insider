@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Git Insider - Repository Analytics</title>
+    <link href="/css/output.css" rel="stylesheet">
+    <!-- GraphiQL CSS (pinned) -->
+    <link rel="stylesheet" href="https://unpkg.com/graphiql@2.4.0/graphiql.min.css">
+    <!-- Highlight.js themes (light and dark). We toggle them based on the site's theme -->
+    <link id="hljs-theme-light" rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css">
+    <link id="hljs-theme-dark" rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" disabled>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+</head>
+<body class="bg-gray-50 dark:bg-dark-bg min-h-screen">
+    <!-- Navigation -->
+    <nav class="navbar px-6 py-4">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center space-x-4">
+                <h1 class="text-xl font-bold text-gray-900 dark:text-dark-text">📊 Git Insider</h1>
+                <span class="badge badge-primary" id="connection-status">Connected</span>
+            </div>
+
+            <div class="flex items-center space-x-4">
+                <!-- Theme Toggle -->
+                <button id="theme-toggle" class="btn btn-secondary">
+                    <span id="theme-icon">🌙</span>
+                </button>
+                
+                <!-- User Menu -->
+                <div class="relative" id="user-menu">
+                    <button id="user-menu-button" class="btn btn-secondary">
+                        <span id="username-display">User</span>
+                        <span>▼</span>
+                    </button>
+                    <div id="user-dropdown" class="absolute right-0 mt-2 w-48 bg-white dark:bg-dark-bg-secondary rounded-lg shadow-lg border border-gray-200 dark:border-dark-border hidden">
+                        <a href="#" class="block px-4 py-2 text-sm text-gray-700 dark:text-dark-text hover:bg-gray-100 dark:hover:bg-gray-700" id="profile-link">Profile</a>
+                        <div class="border-t border-gray-200 dark:border-dark-border"></div>
+                        <a href="#" class="block px-4 py-2 text-sm text-gray-700 dark:text-dark-text hover:bg-gray-100 dark:hover:bg-gray-700" id="logout-link">Logout</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="flex">
+        <!-- Sidebar -->
+        <aside class="sidebar w-64 min-h-screen p-4 dark:text-dark-text">
+            <nav class="flex flex-col space-y-2">
+                <a href="#dashboard" class="nav-link active" data-page="dashboard">
+                    📊 Dashboard
+                </a>
+                <a href="#commits" class="nav-link" data-page="commits">
+                    📝 Commits
+                </a>
+                <a href="#code-changes" class="nav-link" data-page="code-changes">
+                    🔄 Code Changes
+                </a>
+                <a href="#repos" class="nav-link" data-page="repos">
+                    📦 Repos
+                </a>
+                <a href="#workspaces" class="nav-link" data-page="workspaces">
+                    🗂️ Work Spaces
+                </a>
+                <a href="#users" class="nav-link" data-page="git-users">
+                    👥 Git Users
+                </a>
+                <a href="#graphql" class="nav-link" data-page="graphql">
+                    🧩 GraphQL
+                </a>
+                <a href="#tokens" class="nav-link" data-page="tokens">
+                    🔑 Tokens
+                </a>
+                <a href="#apis" class="nav-link" data-page="apis">
+                    🔌 APIs
+                </a>
+                <div class="border-t border-gray-200 dark:border-dark-border mt-4 pt-4">
+                    <a href="#admin" class="nav-link admin-only hidden" data-page="admin">
+                        ⚙️ Admin
+                    </a>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 p-6">
+            <!-- Loading Spinner -->
+            <div id="loading" class="flex items-center justify-center py-12 hidden">
+                <div class="loading-spinner w-8 h-8"></div>
+                <span class="ml-2 text-gray-600 dark:text-dark-text-secondary">Loading...</span>
+            </div>
+
+            <!-- Dashboard Page -->
+            <div id="dashboard-page" class="page">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Dashboard</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Overview of your Git repository analytics</p>
+                </div>
+
+                <!-- Stats Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" id="stats-grid">
+                    <!-- Stats will be populated dynamically -->
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="card">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Recent Activity</h3>
+                    <div id="recent-commits" class="space-y-3">
+                        <!-- Recent commits will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Commits Page -->
+            <div id="commits-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Commits Analysis</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Analyze commits by users and date ranges</p>
+                </div>
+
+                <!-- Filters -->
+                <div class="card mb-6">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Filters</h3>
+                    <form id="commits-filter-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">User</label>
+                            <input type="text" id="commits-user" class="input" placeholder="Enter username or email">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Start Date</label>
+                            <input type="date" id="commits-start-date" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">End Date</label>
+                            <input type="date" id="commits-end-date" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Repository</label>
+                            <select id="commits-repository" class="select">
+                                <option value="">All Repositories</option>
+                            </select>
+                        </div>
+                        <div class="md:col-span-2 lg:col-span-4">
+                            <button type="submit" class="btn btn-primary">Search Commits</button>
+                            <button type="button" id="commits-reset" class="btn btn-secondary ml-2">Reset</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Results -->
+                <div class="card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Results</h3>
+                        <div class="text-sm text-gray-600 dark:text-dark-text-secondary" id="commits-count">
+                            <!-- Count will be populated -->
+                        </div>
+                    </div>
+                    <div id="commits-results" class="space-y-3">
+                        <!-- Results will be populated dynamically -->
+                    </div>
+                    <div id="commits-pagination" class="mt-6 flex justify-center">
+                        <!-- Pagination will be populated -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Code Changes Page -->
+            <div id="code-changes-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Code Changes</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Analyze code changes with file statistics</p>
+                </div>
+
+                <!-- Similar structure to commits page but for code changes -->
+                <div class="card mb-6">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Filters</h3>
+                    <form id="changes-filter-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">User</label>
+                            <input type="text" id="changes-user" class="input" placeholder="Enter username or email">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Start Date</label>
+                            <input type="date" id="changes-start-date" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">End Date</label>
+                            <input type="date" id="changes-end-date" class="input">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Repository</label>
+                            <select id="changes-repository" class="select">
+                                <option value="">All Repositories</option>
+                            </select>
+                        </div>
+                        <div class="md:col-span-2 lg:col-span-4">
+                            <button type="submit" class="btn btn-primary">Search Changes</button>
+                            <button type="button" id="changes-reset" class="btn btn-secondary ml-2">Reset</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Results</h3>
+                        <div class="text-sm text-gray-600 dark:text-dark-text-secondary" id="changes-count">
+                        </div>
+                    </div>
+                    <div id="changes-results" class="space-y-3">
+                    </div>
+                    <div id="changes-pagination" class="mt-6 flex justify-center">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Repos Page -->
+            <div id="repos-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Repos</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">List repositories found under your saved Work Spaces. Filter by specific Work Spaces.</p>
+                </div>
+
+                <!-- Filters -->
+                <div class="card mb-6">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Filters</h3>
+                    <form id="repos-filter-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="md:col-span-2 lg:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Work Spaces</label>
+                            <select id="repos-workspaces" class="select w-full" multiple size="6">
+                                <!-- Options populated dynamically -->
+                            </select>
+                            <p class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Hold Ctrl/Cmd to select multiple.</p>
+                        </div>
+                        <div class="md:col-span-2 lg:col-span-4">
+                            <button type="submit" class="btn btn-primary">Apply Filters</button>
+                            <button type="button" id="repos-reset" class="btn btn-secondary ml-2">Reset</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Results -->
+                <div class="card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Results</h3>
+                        <div class="text-sm text-gray-600 dark:text-dark-text-secondary" id="repos-count"></div>
+                    </div>
+                    <div id="repos-results" class="space-y-3">
+                        <!-- Repo items injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Work Spaces Page -->
+            <div id="workspaces-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Work Spaces</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Manage root folders and scan them for Git repositories</p>
+                </div>
+
+                <!-- Scan Workspace for Repositories -->
+                <div class="card mb-6">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Scan Workspace for Git Repositories</h3>
+                    <form id="scan-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="md:col-span-2 lg:col-span-4">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Folder Path</label>
+                            <input type="text" id="scan-path" class="input" placeholder="e.g., D:\\Projects or /home/user/code" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Max Depth</label>
+                            <input type="number" id="scan-max-depth" class="input" min="0" value="4">
+                        </div>
+                        <div class="flex items-center space-x-2 mt-6">
+                            <input type="checkbox" id="scan-follow-symlinks" class="checkbox">
+                            <label for="scan-follow-symlinks" class="text-sm text-gray-700 dark:text-dark-text">Follow Symlinks</label>
+                        </div>
+                        <div class="md:col-span-2 lg:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Exclude Folders (comma separated)</label>
+                            <input type="text" id="scan-exclude" class="input" placeholder="node_modules,.git,dist,build">
+                        </div>
+                        <div class="md:col-span-2 lg:col-span-4">
+                            <button type="submit" class="btn btn-primary">Scan and Add Folder</button>
+                            <span id="scan-status" class="ml-3 text-sm text-gray-600 dark:text-dark-text-secondary"></span>
+                        </div>
+                    </form>
+                    <div id="scan-results" class="mt-4 space-y-2">
+                        <!-- Scan results will be populated here -->
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Saved Work Spaces</h3>
+                    </div>
+                    <div id="workspaces-list" class="space-y-3">
+                        <!-- Workspaces will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Git Users Page -->
+            <div id="git-users-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Git Users</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">All users who have committed to your repositories</p>
+                </div>
+
+                <div class="card">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Git Contributors</h3>
+                    <div id="git-users-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <!-- Git users will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- GraphQL Page -->
+            <div id="graphql-page" class="page hidden">
+                <div class="mb-6 flex items-center justify-between">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">GraphQL Explorer</h2>
+                        <p class="text-gray-600 dark:text-dark-text-secondary">Write and run GraphQL queries against Git Insider's schema.</p>
+                    </div>
+                    <button id="graphql-help-toggle" class="btn btn-secondary">Show Help</button>
+                </div>
+
+                <div id="graphql-grid" class="grid grid-cols-1 gap-6">
+                    <div id="graphql-editor-card" class="card p-0" style="height: 75vh;">
+                        <!-- GraphiQL will render here -->
+                        <div id="graphiql" class="h-full w-full"></div>
+                    </div>
+                    <div id="graphql-help-card" class="card hidden">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Help & Examples</h3>
+                        <p class="text-sm text-gray-600 dark:text-dark-text-secondary mb-3">Use the Docs explorer in GraphiQL to browse the schema. Below are a few sample queries you can try:</p>
+                        <div class="space-y-4 dark:text-dark-text-secondary">
+                            <div>
+                                <div class="text-sm font-medium mb-1">List repositories</div>
+                                <pre class="text-xs overflow-auto rounded-md p-3 bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"><code class="language-graphql">query {
+                                    repositories { id name path }
+                                }
+                            </code>
+                            </pre>
+                            </div>
+                            <div>
+                                <div class="text-sm font-medium mb-1">Recent commits (first 10)</div>
+                                <pre class="text-xs overflow-auto rounded-md p-3 bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"><code class="language-graphql">query {
+  commits(limit: 10) {
+    repository
+    hash
+    author
+    date
+    message
+  }
+}</code></pre>
+                            </div>
+                            <div>
+                                <div class="text-sm font-medium mb-1">Repository stats</div>
+                                <pre class="text-xs overflow-auto rounded-md p-3 bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"><code class="language-graphql">query($id: Int!) {
+  repositoryStats(id: $id) {
+    repository
+    totalCommits
+    contributors
+    branches
+    lastCommit { hash author date message }
+  }
+}</code></pre>
+                    <p class="text-xs text-gray-500 dark:text-dark-text-secondary">Variables: {"id": 1}</p>
+                </div>
+            </div>
+            </div>
+
+            </div>
+            </div>
+            
+            <!-- Tokens Page -->
+            <div id="tokens-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">API Tokens</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Create, copy, and revoke tokens used for API and GraphQL authentication.</p>
+                </div>
+
+                <!-- New Token Box (shown after creation) -->
+                <div id="new-token-box" class="card hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">New Token Created</h3>
+                        <button class="btn btn-secondary btn-sm" data-dismiss>Close</button>
+                    </div>
+                    <p class="text-sm text-gray-600 dark:text-dark-text-secondary mb-3">Copy this token now. You will not be able to view it again.</p>
+                    <div class="flex items-center">
+                        <code id="new-token-value" class="px-3 py-2 rounded bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100 break-all"></code>
+                        <button id="copy-new-token" class="btn btn-secondary ml-3">Copy</button>
+                    </div>
+                </div>
+
+                <!-- Create Token -->
+                <div class="card mb-6">
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Create Token</h3>
+                    <form id="tokens-create-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Token Name</label>
+                            <input type="text" id="token-name" class="input" placeholder="e.g., CI Bot" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Expires At (optional)</label>
+                            <input type="datetime-local" id="token-expires" class="input">
+                            <p class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Leave empty for no expiration.</p>
+                        </div>
+                        <div class="md:col-span-2 lg:col-span-4">
+                            <button type="submit" class="btn btn-primary">Create Token</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Tokens List -->
+                <div class="card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Your Tokens</h3>
+                        <div id="tokens-count" class="text-sm text-gray-600 dark:text-dark-text-secondary"></div>
+                    </div>
+                    <div id="tokens-list" class="space-y-3"></div>
+                </div>
+            </div>
+
+            <!-- APIs Page -->
+            <div id="apis-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">APIs</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Browse available endpoints, read descriptions, and try them interactively.</p>
+                </div>
+
+                <div class="card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Available Endpoints</h3>
+                    </div>
+                    <div id="apis-list" class="space-y-3">
+                        <!-- API items injected here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Page -->
+            <div id="admin-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Admin Panel</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Manage users and system settings</p>
+                </div>
+
+                <!-- System Stats -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8" id="admin-stats">
+                    <!-- Admin stats will be populated dynamically -->
+                </div>
+
+                <!-- User Management -->
+                <div class="card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">User Management</h3>
+                        <button id="add-user-btn" class="btn btn-primary">Add User</button>
+                    </div>
+                    <div id="users-list">
+                        <!-- Users will be populated dynamically -->
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-6 text-center">Login to Git Insider</h2>
+            <form id="login-form">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Username</label>
+                    <input type="text" id="login-username" class="input" required>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Password</label>
+                    <input type="password" id="login-password" class="input" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-full">
+                    <span id="login-btn-text">Login</span>
+                    <div id="login-spinner" class="loading-spinner ml-2 hidden"></div>
+                </button>
+            </form>
+            <div id="login-error" class="mt-4 text-red-600 text-sm hidden"></div>
+        </div>
+    </div>
+
+    <!-- Modals and other UI components will be added here -->
+
+    <style>
+        .nav-link {
+            @apply block px-4 py-2 text-sm text-gray-700 dark:text-dark-text rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors;
+        }
+        .nav-link.active {
+            @apply bg-git-blue text-white hover:bg-blue-700;
+        }
+        .page {
+            @apply transition-opacity duration-200;
+        }
+        .page.hidden {
+            @apply opacity-0 pointer-events-none;
+        }
+        /* Ensure GraphiQL fills its container */
+        #graphiql, #graphiql > * {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+
+    <!-- Highlight.js core -->
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+    <script>
+        // Configure HLJS and keep its theme in sync with our app theme (html.dark class)
+        window.addEventListener('DOMContentLoaded', () => {
+            if (window.hljs) {
+                hljs.configure({ ignoreUnescapedHTML: true });
+            }
+            const lightLink = document.getElementById('hljs-theme-light');
+            const darkLink = document.getElementById('hljs-theme-dark');
+            const applyHljsTheme = () => {
+                const isDark = document.documentElement.classList.contains('dark');
+                if (lightLink && darkLink) {
+                    lightLink.disabled = isDark;
+                    darkLink.disabled = !isDark;
+                }
+            };
+            // Initial apply and observe theme changes
+            applyHljsTheme();
+            const observer = new MutationObserver(applyHljsTheme);
+            observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        });
+    </script>
+
+    <!-- React + GraphiQL (UMD, pinned) -->
+    <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/graphiql@2.4.0/graphiql.min.js"></script>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/tokens.js"></script>
+    <script src="/js/auth.js"></script>
+    <script src="/js/admin.js"></script>
+    <script src="/js/git-analytics.js"></script>
+</body>
+</html>

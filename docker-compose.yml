@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  git-insider:
+    build: .
+    ports:
+      - "3201:3201"
+    environment:
+      - NODE_ENV=production
+      - PORT=3201
+      - JWT_SECRET=your_jwt_secret_key_change_in_production
+      - DB_PATH=/usr/src/app/database/app.db
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin123
+    volumes:
+      - ./database:/usr/src/app/database
+      - ./repos:/usr/src/app/repos  # Mount point for git repositories
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    name: git-insider-network

@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    body {
+        @apply transition-colors duration-200;
+    }
+}
+
+@layer components {
+    .btn {
+        @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+    }
+    
+    .btn-primary {
+        @apply bg-git-blue text-white hover:bg-blue-700 focus:ring-git-blue;
+    }
+    
+    .btn-secondary {
+        @apply bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-400;
+        @apply dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600;
+    }
+    
+    .btn-danger {
+        @apply bg-git-red text-white hover:bg-red-700 focus:ring-git-red;
+    }
+    
+    .btn-success {
+        @apply bg-git-green text-white hover:bg-green-700 focus:ring-git-green;
+    }
+    
+    .card {
+        @apply bg-white dark:bg-dark-bg-secondary rounded-lg border border-gray-200 dark:border-dark-border shadow-sm p-6;
+    }
+    
+    .input {
+        @apply block w-full rounded-lg border border-gray-300 dark:border-dark-border bg-white dark:bg-dark-bg-secondary text-gray-900 dark:text-dark-text px-3 py-2 focus:border-git-blue focus:outline-none focus:ring-1 focus:ring-git-blue;
+    }
+    
+    .select {
+        @apply block w-full rounded-lg border border-gray-300 dark:border-dark-border bg-white dark:bg-dark-bg-secondary text-gray-900 dark:text-dark-text px-3 py-2 focus:border-git-blue focus:outline-none focus:ring-1 focus:ring-git-blue;
+    }
+    
+    .sidebar {
+        @apply bg-white dark:bg-dark-bg-secondary border-r border-gray-200 dark:border-dark-border;
+    }
+    
+    .navbar {
+        @apply bg-white dark:bg-dark-bg-secondary border-b border-gray-200 dark:border-dark-border shadow-sm;
+    }
+    
+    .commit-card {
+        @apply bg-white dark:bg-dark-bg-secondary border border-gray-200 dark:border-dark-border rounded-lg p-4 hover:shadow-md transition-shadow;
+    }
+    
+    .stat-card {
+        @apply bg-gradient-to-r from-git-blue to-git-purple text-white rounded-lg p-6 shadow-lg;
+    }
+    
+    .loading-spinner {
+        @apply inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin;
+    }
+    
+    .badge {
+        @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+    }
+    
+    .badge-primary {
+        @apply bg-git-blue text-white;
+    }
+    
+    .badge-success {
+        @apply bg-git-green text-white;
+    }
+    
+    .badge-warning {
+        @apply bg-git-orange text-white;
+    }
+    
+    .badge-gray {
+        @apply bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300;
+    }
+}
