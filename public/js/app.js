@@ -1128,9 +1128,12 @@ class GitInsiderApp {
 
             const fetcher = async (graphQLParams, opts = {}) => {
                 const editorHeaders = (opts && opts.headers) ? opts.headers : {};
+                const baseAuthHeaders = getAuthHeaders();
+                const usedToken = !!baseAuthHeaders['Authorization'];
+                const usedApiKey = !!baseAuthHeaders['X-API-Key'];
                 const headers = {
                     'Content-Type': 'application/json',
-                    ...getAuthHeaders(),
+                    ...baseAuthHeaders,
                     ...editorHeaders,
                 };
                 const resp = await fetch('/api/graphql', {
@@ -1139,6 +1142,19 @@ class GitInsiderApp {
                     credentials: 'same-origin',
                     body: JSON.stringify(graphQLParams),
                 });
+                if (resp.status === 401 || resp.status === 403) {
+                    let msg = '';
+                    try {
+                        const obj = await resp.json();
+                        msg = (obj && (obj.error || obj.message)) ? (obj.error || obj.message) : '';
+                    } catch (e) {}
+                    if (usedToken) {
+                        this.handleAuthFailure(resp.status, msg, 'token');
+                    } else if (usedApiKey) {
+                        this.handleAuthFailure(resp.status, msg || 'Invalid or expired API key', 'apiKey');
+                    }
+                    return { errors: [{ message: msg || (resp.status === 401 ? 'Unauthorized' : 'Forbidden') }] };
+                }
                 const ct = resp.headers.get('content-type') || '';
                 if (ct.includes('application/json')) {
                     return resp.json();
@@ -1231,6 +1247,21 @@ class GitInsiderApp {
         return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    handleAuthFailure(status, message, source = 'token') {
+        const defaultMsg = status === 401
+            ? 'Your session has expired or is invalid. Please log in again.'
+            : 'You do not have permission to perform this action.';
+        const msg = message || defaultMsg;
+
+        if (source === 'token') {
+            this.logout();
+        } else if (source === 'apiKey') {
+            try { localStorage.removeItem('activeApiKey'); } catch (e) {}
+        }
+
+        this.showError(msg);
+    }
+
     async apiCall(endpoint, options = {}) {
         const token = localStorage.getItem('authToken');
         const defaultOptions = {
@@ -1241,10 +1272,24 @@ class GitInsiderApp {
         };
 
         const response = await fetch(endpoint, { ...defaultOptions, ...options });
-        
+
+        if (response.status === 401 || response.status === 403) {
+            let errMsg = '';
+            try {
+                const err = await response.json();
+                errMsg = err && (err.error || err.message) ? (err.error || err.message) : '';
+            } catch (e) {}
+            this.handleAuthFailure(response.status, errMsg, 'token');
+            throw new Error(errMsg || (response.status === 401 ? 'Unauthorized' : 'Forbidden'));
+        }
+
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'API request failed');
+            let errorText = 'API request failed';
+            try {
+                const err = await response.json();
+                errorText = (err && (err.error || err.message)) ? (err.error || err.message) : errorText;
+            } catch (e) {}
+            throw new Error(errorText);
         }
 
         return response.json();

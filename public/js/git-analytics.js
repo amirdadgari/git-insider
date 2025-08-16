@@ -422,11 +422,18 @@ class GitAnalytics {
             }
 
             const token = localStorage.getItem('authToken');
-            const resp = await fetch(url, {
-                headers: {
-                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-                }
-            });
+            const apiKey = localStorage.getItem('activeApiKey');
+            const headers = {};
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            else if (apiKey) headers['X-API-Key'] = apiKey;
+
+            const resp = await fetch(url, { headers });
+            if (resp.status === 401 || resp.status === 403) {
+                let msg = 'Authentication failed';
+                try { const j = await resp.json(); msg = j.error || j.message || msg; } catch { try { msg = await resp.text(); } catch { /* noop */ } }
+                app.handleAuthFailure(resp.status, msg, token ? 'token' : 'apiKey');
+                throw new Error(msg || (resp.status === 401 ? 'Unauthorized' : 'Forbidden'));
+            }
             if (!resp.ok) {
                 let msg = 'Failed to fetch file diff';
                 try { const j = await resp.json(); msg = j.error || msg; } catch { try { msg = await resp.text(); } catch { /* noop */ } }
