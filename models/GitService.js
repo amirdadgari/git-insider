@@ -23,7 +23,7 @@ class GitService {
                 try {
                     await fs.access(repo.path);
                     const git = simpleGit(repo.path);
-                    await git.status(); // Verify it's a valid git repository
+                    await git.raw(['rev-parse', '--git-dir']); // Verify it's a git repository (bare or non-bare)
                     this.repositories.set(repo.id, {
                         ...repo,
                         git: git
@@ -43,7 +43,7 @@ class GitService {
         if (!repoPath) throw new Error('Repository path is required');
         try {
             const git = simpleGit(repoPath);
-            await git.status();
+            await git.raw(['rev-parse', '--git-dir']); // works for bare & non-bare
 
             const show = await git.show([commitHash, '--name-status']);
             const commit = await git.show([commitHash, '--format=fuller']);
@@ -105,7 +105,7 @@ class GitService {
         try {
             // Verify the path contains a git repository
             const git = simpleGit(repoPath);
-            await git.status();
+            await git.raw(['rev-parse', '--git-dir']);
 
             const result = await this.db.run(
                 'INSERT INTO git_repositories (name, path, url, description) VALUES (?, ?, ?, ?)',
@@ -195,7 +195,7 @@ class GitService {
                     for (const repoInfo of repos) {
                         try {
                             const git = simpleGit(repoInfo.path);
-                            await git.status();
+                            await git.raw(['rev-parse', '--git-dir']);
 
                             const format = {
                                 hash: '%H',
@@ -343,7 +343,7 @@ class GitService {
         if (!filePath) throw new Error('File path is required');
         try {
             const git = simpleGit(repoPath);
-            await git.status();
+            await git.raw(['rev-parse', '--git-dir']);
             const diff = await git.show([commitHash, '--', filePath]);
             return diff;
         } catch (error) {
@@ -365,7 +365,7 @@ class GitService {
                     for (const repoInfo of repos) {
                         try {
                             const git = simpleGit(repoInfo.path);
-                            await git.status();
+                            await git.raw(['rev-parse', '--git-dir']);
 
                             const options = [
                                 '--numstat',
@@ -547,7 +547,7 @@ class GitService {
         }
     }
 
-    // Recursively scan a folder for git repositories by checking for a .git directory
+    // Recursively scan a folder for git repositories (supports working trees and bare repos)
     async scanForRepositories(rootPath, options = {}) {
         const { maxDepth = 4, exclude = ['node_modules', '.git', '.hg', '.svn', 'dist', 'build', '.next'], followSymlinks = false } = options;
 
@@ -566,20 +566,37 @@ class GitService {
 
         const isExcluded = (name) => exclude.some(ex => ex.toLowerCase() === name.toLowerCase());
 
-        const hasGitFolder = async (dir) => {
+        const hasGitRepo = async (dir) => {
+            // 1) Working tree repo with a .git directory or file
             try {
                 await fs.access(path.join(dir, '.git'));
                 return true;
-            } catch {
-                return false;
+            } catch {}
+
+            // 2) Bare repo heuristic: presence of HEAD, objects, and config
+            try {
+                await fs.access(path.join(dir, 'HEAD'));
+                await fs.access(path.join(dir, 'objects'));
+                await fs.access(path.join(dir, 'config'));
+                return true;
+            } catch {}
+
+            // 3) As a cheap extra heuristic, directories ending with ".git" are likely bare repos
+            if (dir.toLowerCase().endsWith('.git')) {
+                try {
+                    await fs.access(path.join(dir, 'HEAD'));
+                    return true;
+                } catch {}
             }
+
+            return false;
         };
 
         const walk = async (dir, depth) => {
             if (depth < 0) return;
             try {
                 // If this directory itself is a git repo, record and do not descend further
-                if (await hasGitFolder(dir)) {
+                if (await hasGitRepo(dir)) {
                     results.push({
                         name: path.basename(dir),
                         path: dir,
