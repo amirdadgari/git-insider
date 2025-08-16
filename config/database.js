@@ -6,7 +6,23 @@ require('dotenv').config();
 
 class Database {
     constructor() {
-        this.dbPath = process.env.DB_PATH || './database/app.db';
+        const configuredPath = (process.env.DB_PATH || './database/app.db').trim();
+        // Resolve to absolute. If relative, resolve from project root (one level up from this file)
+        const projectRoot = path.resolve(__dirname, '..');
+        let resolved = path.isAbsolute(configuredPath)
+            ? configuredPath
+            : path.resolve(projectRoot, configuredPath);
+
+        // If the resolved path is a directory (or ends with a path separator), append a default filename
+        try {
+            if ((fs.existsSync(resolved) && fs.lstatSync(resolved).isDirectory()) || resolved.endsWith(path.sep)) {
+                resolved = path.join(resolved, 'app.db');
+            }
+        } catch (_) {
+            // ignore stat errors here; we'll create the path later
+        }
+
+        this.dbPath = resolved;
         this.db = null;
     }
 
@@ -16,12 +32,24 @@ class Database {
             try {
                 const dir = path.dirname(this.dbPath);
                 fs.mkdirSync(dir, { recursive: true });
+                // Verify read/write access to the directory
+                fs.accessSync(dir, fs.constants.R_OK | fs.constants.W_OK);
+                // Pre-create the database file if it doesn't exist to avoid permission issues
+                if (!fs.existsSync(this.dbPath)) {
+                    const fd = fs.openSync(this.dbPath, 'a');
+                    fs.closeSync(fd);
+                }
             } catch (mkdirErr) {
                 console.error('Failed to ensure database directory exists:', mkdirErr);
                 return reject(mkdirErr);
             }
 
-            this.db = new sqlite3.Database(this.dbPath, (err) => {
+            console.log('Using SQLite database at:', this.dbPath);
+
+            this.db = new sqlite3.Database(
+                this.dbPath,
+                sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE,
+                (err) => {
                 if (err) {
                     console.error('Error connecting to database:', err);
                     reject(err);
@@ -29,7 +57,8 @@ class Database {
                     console.log('Connected to SQLite database');
                     this.initializeSchema().then(resolve).catch(reject);
                 }
-            });
+                }
+            );
         });
     }
 

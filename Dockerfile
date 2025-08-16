@@ -18,6 +18,8 @@ RUN mkdir -p database public/css
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3201
+ENV DB_PATH=/usr/src/app/database/app.db
+ENV GIT_REPOS_PATH=/usr/src/app/repos
 
 # Create a non-root user
 RUN addgroup -g 1001 -S nodejs
