@@ -128,8 +128,30 @@ class Database {
             await this.run(schema);
         }
 
+        // Apply lightweight migrations to extend existing tables
+        await this.migrate();
+
         // Create default admin user
         await this.createDefaultAdmin();
+    }
+
+    async migrate() {
+        try {
+            const columns = await this.all("PRAGMA table_info('git_repositories')");
+            const has = (name) => Array.isArray(columns) && columns.some(c => c.name === name);
+
+            if (!has('display_name')) {
+                await this.run("ALTER TABLE git_repositories ADD COLUMN display_name TEXT");
+            }
+            if (!has('scm')) {
+                await this.run("ALTER TABLE git_repositories ADD COLUMN scm TEXT");
+            }
+            if (!has('scm_fullpath')) {
+                await this.run("ALTER TABLE git_repositories ADD COLUMN scm_fullpath TEXT");
+            }
+        } catch (err) {
+            console.error('Migration error:', err.message || err);
+        }
     }
 
     async createDefaultAdmin() {

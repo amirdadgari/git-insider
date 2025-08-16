@@ -10,6 +10,52 @@ class GitService {
         this.repositories = new Map();
     }
 
+    // Internal helpers reused across methods
+    async _resolveGitConfigPath(dir) {
+        const dotGitPath = path.join(dir, '.git');
+        try {
+            const stat = await fs.lstat(dotGitPath);
+            if (stat.isDirectory()) {
+                return { configPath: path.join(dotGitPath, 'config'), type: 'worktree' };
+            }
+            if (stat.isFile()) {
+                const content = await fs.readFile(dotGitPath, 'utf8');
+                const match = content.match(/gitdir:\s*(.*)/i);
+                if (match && match[1]) {
+                    const gitdir = match[1].trim();
+                    const resolvedGitDir = path.isAbsolute(gitdir) ? gitdir : path.resolve(dir, gitdir);
+                    return { configPath: path.join(resolvedGitDir, 'config'), type: 'worktree' };
+                }
+            }
+        } catch {}
+        return { configPath: path.join(dir, 'config'), type: 'bare' };
+    }
+
+    async _parseGitlabFullpath(configPath) {
+        try {
+            const content = await fs.readFile(configPath, 'utf8');
+            let inGitlab = false;
+            let fullpath = null;
+            for (const rawLine of content.split(/\r?\n/)) {
+                const line = rawLine.trim();
+                if (line.startsWith('[') && line.endsWith(']')) {
+                    inGitlab = line.replace(/[\[\]]/g, '').trim().toLowerCase() === 'gitlab';
+                    continue;
+                }
+                if (inGitlab) {
+                    const m = line.match(/^fullpath\s*=\s*(.+)$/i);
+                    if (m) {
+                        fullpath = m[1].trim();
+                        break;
+                    }
+                }
+            }
+            return fullpath;
+        } catch {
+            return null;
+        }
+    }
+
     async initialize() {
         await this.db.connect();
         await this.loadRepositories();
@@ -24,10 +70,24 @@ class GitService {
                     await fs.access(repo.path);
                     const git = simpleGit(repo.path);
                     await git.raw(['rev-parse', '--git-dir']); // Verify it's a git repository (bare or non-bare)
-                    this.repositories.set(repo.id, {
-                        ...repo,
-                        git: git
-                    });
+                    // Try to enrich missing metadata from git config
+                    if (!repo.display_name || !repo.scm_fullpath) {
+                        try {
+                            const configInfo = await this._resolveGitConfigPath(repo.path);
+                            const fullpath = await this._parseGitlabFullpath(configInfo.configPath);
+                            const displayName = fullpath ? fullpath.split('/').pop() : null;
+                            if (displayName || fullpath) {
+                                await this.db.run(
+                                    'UPDATE git_repositories SET display_name = COALESCE(?, display_name), scm = COALESCE(?, scm), scm_fullpath = COALESCE(?, scm_fullpath), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                                    [displayName, fullpath ? 'gitlab' : null, fullpath, repo.id]
+                                );
+                                repo.display_name = displayName || repo.display_name;
+                                repo.scm = fullpath ? 'gitlab' : repo.scm;
+                                repo.scm_fullpath = fullpath || repo.scm_fullpath;
+                            }
+                        } catch {}
+                    }
+                    this.repositories.set(repo.id, { ...repo, git });
                     console.log(`Loaded repository: ${repo.name}`);
                 } catch (error) {
                     console.warn(`Warning: Repository ${repo.name} at ${repo.path} is not accessible`);
@@ -48,8 +108,16 @@ class GitService {
             const show = await git.show([commitHash, '--name-status']);
             const commit = await git.show([commitHash, '--format=fuller']);
 
+            // Try to derive display name from git config
+            let repoDisplay = null;
+            try {
+                const cfg = await this._resolveGitConfigPath(repoPath);
+                const fullpath = await this._parseGitlabFullpath(cfg.configPath);
+                if (fullpath) repoDisplay = fullpath.split('/').pop();
+            } catch {}
+
             return {
-                repository: path.basename(repoPath),
+                repository: repoDisplay || path.basename(repoPath),
                 hash: commitHash,
                 details: commit,
                 changedFiles: show
@@ -107,9 +175,21 @@ class GitService {
             const git = simpleGit(repoPath);
             await git.raw(['rev-parse', '--git-dir']);
 
+            // derive metadata from git config
+            let displayName = null, scm = null, scm_fullpath = null;
+            try {
+                const cfg = await this._resolveGitConfigPath(repoPath);
+                const fullpath = await this._parseGitlabFullpath(cfg.configPath);
+                if (fullpath) {
+                    scm = 'gitlab';
+                    scm_fullpath = fullpath;
+                    displayName = fullpath.split('/').pop();
+                }
+            } catch {}
+
             const result = await this.db.run(
-                'INSERT INTO git_repositories (name, path, url, description) VALUES (?, ?, ?, ?)',
-                [name, repoPath, url, description]
+                'INSERT INTO git_repositories (name, path, url, description, display_name, scm, scm_fullpath) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [name, repoPath, url, description, displayName, scm, scm_fullpath]
             );
 
             const newRepo = {
@@ -118,6 +198,9 @@ class GitService {
                 path: repoPath,
                 url,
                 description,
+                display_name: displayName,
+                scm,
+                scm_fullpath,
                 git: git
             };
 
@@ -164,7 +247,7 @@ class GitService {
                     if (startBound && cDate < startBound) continue;
                     if (endBound && cDate > endBound) continue;
                     commits.push({
-                        repository: repo.name,
+                        repository: repo.display_name || repo.name,
                         repositoryId: repoId,
                         hash: commit.hash,
                         author: commit.author || commit.author_name,
@@ -217,7 +300,7 @@ class GitService {
                                 if (startBound && cDate < startBound) continue;
                                 if (endBound && cDate > endBound) continue;
                                 commits.push({
-                                    repository: repoInfo.name,
+                                    repository: repoInfo.displayName || repoInfo.name,
                                     repositoryId: null,
                                     repositoryPath: repoInfo.path,
                                     hash: commit.hash,
@@ -252,7 +335,7 @@ class GitService {
             const commit = await repo.git.show([commitHash, '--format=fuller']);
             
             return {
-                repository: repo.name,
+                repository: repo.display_name || repo.name,
                 hash: commitHash,
                 details: commit,
                 changedFiles: show
@@ -290,7 +373,7 @@ class GitService {
                     if (line.includes('|') && !line.match(/^\d+\s+\d+\s+/)) {
                         const [hash, author, email, date, message] = line.split('|');
                         currentCommit = {
-                            repository: repo.name,
+                            repository: repo.display_name || repo.name,
                             repositoryId: repoId,
                             hash,
                             author,
@@ -384,7 +467,7 @@ class GitService {
                                 if (line.includes('|') && !line.match(/^\d+\s+\d+\s+/)) {
                                     const [hash, author, email, date, message] = line.split('|');
                                     currentCommit = {
-                                        repository: repoInfo.name,
+                                        repository: repoInfo.displayName || repoInfo.name,
                                         repositoryId: null,
                                         repositoryPath: repoInfo.path,
                                         hash,
@@ -438,7 +521,7 @@ class GitService {
             if (endDate) options.push(`--until=${endDate}`);
 
             const log = await repo.git.raw(['log', ...options]);
-            const changes = this.parseLogOutput(log, repo.name, repositoryId);
+            const changes = this.parseLogOutput(log, repo.display_name || repo.name, repositoryId);
             
             return changes.sort((a, b) => new Date(b.date) - new Date(a.date));
         } catch (error) {
@@ -531,7 +614,7 @@ class GitService {
             const branches = await repo.git.branch(['-a']);
             
             return {
-                repository: repo.name,
+                repository: repo.display_name || repo.name,
                 totalCommits: log.total,
                 contributors: contributors.size,
                 branches: branches.all.length,
@@ -558,9 +641,10 @@ class GitService {
         // Normalize and ensure absolute path
         const normalizedRoot = path.resolve(rootPath);
 
-        // Load existing repository paths once for quick lookup
-        const existing = await this.db.all('SELECT path FROM git_repositories');
+        // Load existing repository paths once for quick lookup (also map to id for updates)
+        const existing = await this.db.all('SELECT id, path FROM git_repositories');
         const existingPaths = new Set(existing.map(r => path.normalize(r.path)));
+        const pathToId = new Map(existing.map(r => [path.normalize(r.path), r.id]));
 
         const results = [];
 
@@ -592,15 +676,87 @@ class GitService {
             return false;
         };
 
+        const resolveGitConfigPath = async (dir) => {
+            // returns { configPath, type }
+            const dotGitPath = path.join(dir, '.git');
+            try {
+                const stat = await fs.lstat(dotGitPath);
+                if (stat.isDirectory()) {
+                    // standard worktree .git/config
+                    return { configPath: path.join(dotGitPath, 'config'), type: 'worktree' };
+                }
+                if (stat.isFile()) {
+                    // .git is a file pointing to actual gitdir
+                    const content = await fs.readFile(dotGitPath, 'utf8');
+                    const match = content.match(/gitdir:\s*(.*)/i);
+                    if (match && match[1]) {
+                        const gitdir = match[1].trim();
+                        const resolvedGitDir = path.isAbsolute(gitdir) ? gitdir : path.resolve(dir, gitdir);
+                        return { configPath: path.join(resolvedGitDir, 'config'), type: 'worktree' };
+                    }
+                }
+            } catch {}
+            // bare repo fallback
+            return { configPath: path.join(dir, 'config'), type: 'bare' };
+        };
+
+        const parseGitlabFullpath = async (configPath) => {
+            try {
+                const content = await fs.readFile(configPath, 'utf8');
+                let inGitlab = false;
+                let fullpath = null;
+                for (const rawLine of content.split(/\r?\n/)) {
+                    const line = rawLine.trim();
+                    if (line.startsWith('[') && line.endsWith(']')) {
+                        inGitlab = line.replace(/[\[\]]/g, '').trim().toLowerCase() === 'gitlab';
+                        continue;
+                    }
+                    if (inGitlab) {
+                        const m = line.match(/^fullpath\s*=\s*(.+)$/i);
+                        if (m) {
+                            fullpath = m[1].trim();
+                            break;
+                        }
+                    }
+                }
+                return fullpath;
+            } catch {
+                return null;
+            }
+        };
+
         const walk = async (dir, depth) => {
             if (depth < 0) return;
             try {
                 // If this directory itself is a git repo, record and do not descend further
                 if (await hasGitRepo(dir)) {
+                    // Derive metadata from git config (GitLab fullpath)
+                    const { configPath } = await resolveGitConfigPath(dir);
+                    const gitlabFullpath = await parseGitlabFullpath(configPath);
+                    const displayName = gitlabFullpath ? gitlabFullpath.split('/').pop() : null;
+                    const normalized = path.normalize(dir);
+                    const alreadyAdded = existingPaths.has(normalized);
+
+                    // If already in DB, update metadata
+                    if (alreadyAdded && (displayName || gitlabFullpath)) {
+                        try {
+                            const repoId = pathToId.get(normalized);
+                            await this.db.run(
+                                'UPDATE git_repositories SET display_name = COALESCE(?, display_name), scm = COALESCE(?, scm), scm_fullpath = COALESCE(?, scm_fullpath), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                                [displayName, gitlabFullpath ? 'gitlab' : null, gitlabFullpath, repoId]
+                            );
+                        } catch (e) {
+                            console.warn(`Failed to update metadata for ${dir}: ${e.message}`);
+                        }
+                    }
+
                     results.push({
-                        name: path.basename(dir),
+                        name: displayName || path.basename(dir),
+                        displayName: displayName || null,
                         path: dir,
-                        alreadyAdded: existingPaths.has(path.normalize(dir))
+                        alreadyAdded,
+                        scm: gitlabFullpath ? 'gitlab' : null,
+                        scm_fullpath: gitlabFullpath || null
                     });
                     return; // don't scan nested repos inside
                 }
