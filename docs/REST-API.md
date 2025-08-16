@@ -91,7 +91,7 @@ Notes:
   - Paginates server-side by slicing results.
 
 - GET `/api/git/commits`
-  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `page=1`, `limit=50`
+  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`
   - Always searches across repositories discovered under saved Work Spaces.
   - Response: `{ commits: Commit[], pagination: { page, limit, total, totalPages } }`
 
@@ -101,7 +101,7 @@ Notes:
 - GET `/api/git/commits/:repositoryId/:hash`
 
 - GET `/api/git/code-changes`
-  - Query: `user?` OR `users=...`, `startDate?`, `endDate?`, `page=1`, `limit=50`
+  - Query: `user?` OR `users=...`, `startDate?`, `endDate?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`
   - Always searches across saved Work Spaces.
 
 - GET `/api/git/search/commits`

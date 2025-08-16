@@ -266,7 +266,7 @@ class GitService {
     }
 
     // Get commits across all repositories found under saved workspaces
-    async getCommitsFromWorkspaces(userPattern, startDate, endDate) {
+    async getCommitsFromWorkspaces(userPattern, startDate, endDate, includeUnnamed = false) {
         const commits = [];
         const startBound = startDate ? moment(startDate, 'YYYY-MM-DD').startOf('day').toDate() : null;
         const endBound = endDate ? moment(endDate, 'YYYY-MM-DD').endOf('day').toDate() : null;
@@ -275,7 +275,8 @@ class GitService {
             for (const ws of workspaces) {
                 try {
                     const repos = await this.scanForRepositories(ws.root_path, {});
-                    for (const repoInfo of repos) {
+                    const reposToUse = includeUnnamed ? repos : repos.filter(r => r.displayName);
+                    for (const repoInfo of reposToUse) {
                         try {
                             const git = simpleGit(repoInfo.path);
                             await git.raw(['rev-parse', '--git-dir']);
@@ -435,7 +436,7 @@ class GitService {
     }
 
     // Get code changes across repositories found under saved workspaces
-    async getCodeChangesFromWorkspaces(userPattern, startDate, endDate) {
+    async getCodeChangesFromWorkspaces(userPattern, startDate, endDate, includeUnnamed = false) {
         const changes = [];
         const startBound = startDate ? moment(startDate, 'YYYY-MM-DD').startOf('day').toDate() : null;
         const endBound = endDate ? moment(endDate, 'YYYY-MM-DD').endOf('day').toDate() : null;
@@ -445,7 +446,8 @@ class GitService {
             for (const ws of workspaces) {
                 try {
                     const repos = await this.scanForRepositories(ws.root_path, {});
-                    for (const repoInfo of repos) {
+                    const reposToUse = includeUnnamed ? repos : repos.filter(r => r.displayName);
+                    for (const repoInfo of reposToUse) {
                         try {
                             const git = simpleGit(repoInfo.path);
                             await git.raw(['rev-parse', '--git-dir']);

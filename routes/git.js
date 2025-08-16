@@ -152,6 +152,7 @@ router.get('/commits', authenticate, async (req, res) => {
             startDate, 
             endDate, 
             repositories,
+            includeUnnamed,
             page = 1,
             limit = 50
         } = req.query;
@@ -167,10 +168,12 @@ router.get('/commits', authenticate, async (req, res) => {
         }
 
         // Always search across all repositories found under saved workspaces
+        const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
         let commits = await gitService.getCommitsFromWorkspaces(
             userPattern,
             startDate,
-            endDate
+            endDate,
+            includeUnnamedBool
         );
 
         // Simple pagination
@@ -228,6 +231,7 @@ router.get('/code-changes', authenticate, async (req, res) => {
             startDate, 
             endDate, 
             repositories,
+            includeUnnamed,
             page = 1,
             limit = 50
         } = req.query;
@@ -241,10 +245,12 @@ router.get('/code-changes', authenticate, async (req, res) => {
         }
 
         // Always search across all repositories found under saved workspaces
+        const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
         let changes = await gitService.getCodeChangesFromWorkspaces(
             userPattern,
             startDate,
-            endDate
+            endDate,
+            includeUnnamedBool
         );
 
         // Simple pagination

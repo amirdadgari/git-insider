@@ -112,7 +112,8 @@ const typeDefs = /* GraphQL */ `
       endDate: String,
       repositories: [Int!],
       page: Int,
-      limit: Int
+      limit: Int,
+      includeUnnamed: Boolean
     ): [Commit!]!
 
     codeChanges(
@@ -122,7 +123,8 @@ const typeDefs = /* GraphQL */ `
       endDate: String,
       repositories: [Int!],
       page: Int,
-      limit: Int
+      limit: Int,
+      includeUnnamed: Boolean
     ): [CodeChange!]!
 
     commitDetails(repositoryId: Int!, hash: String!): CommitDetails
@@ -163,7 +165,7 @@ const resolvers = {
     },
     commits: async (
       _p,
-      { user, users, startDate, endDate, repositories, page, limit },
+      { user, users, startDate, endDate, repositories, page, limit, includeUnnamed },
       { gitService }
     ) => {
       let userPattern = null;
@@ -171,7 +173,7 @@ const resolvers = {
       else if (Array.isArray(users) && users.length) userPattern = users.join('|');
 
       // Always fetch across saved Work Spaces
-      let commits = await gitService.getCommitsFromWorkspaces(userPattern, startDate, endDate);
+      let commits = await gitService.getCommitsFromWorkspaces(userPattern, startDate, endDate, !!includeUnnamed);
 
       if (limit) {
         const pg = Math.max(1, parseInt(page || 1, 10));
@@ -183,7 +185,7 @@ const resolvers = {
     },
     codeChanges: async (
       _p,
-      { user, users, startDate, endDate, repositories, page, limit },
+      { user, users, startDate, endDate, repositories, page, limit, includeUnnamed },
       { gitService }
     ) => {
       let userPattern = null;
@@ -191,7 +193,7 @@ const resolvers = {
       else if (Array.isArray(users) && users.length) userPattern = users.join('|');
 
       // Always fetch across saved Work Spaces
-      let changes = await gitService.getCodeChangesFromWorkspaces(userPattern, startDate, endDate);
+      let changes = await gitService.getCodeChangesFromWorkspaces(userPattern, startDate, endDate, !!includeUnnamed);
 
       if (limit) {
         const pg = Math.max(1, parseInt(page || 1, 10));
