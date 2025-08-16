@@ -1,5 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 require('dotenv').config();
 
@@ -11,6 +12,15 @@ class Database {
 
     connect() {
         return new Promise((resolve, reject) => {
+            // Ensure the database directory exists so SQLite can create the file if needed
+            try {
+                const dir = path.dirname(this.dbPath);
+                fs.mkdirSync(dir, { recursive: true });
+            } catch (mkdirErr) {
+                console.error('Failed to ensure database directory exists:', mkdirErr);
+                return reject(mkdirErr);
+            }
+
             this.db = new sqlite3.Database(this.dbPath, (err) => {
                 if (err) {
                     console.error('Error connecting to database:', err);
