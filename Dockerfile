@@ -3,6 +3,9 @@ FROM node:18-alpine
 # Set working directory
 WORKDIR /usr/src/app
 
+# Install OS packages (git for simple-git, ssh for private repos)
+RUN apk add --no-cache git openssh ca-certificates && update-ca-certificates
+
 # Copy package files
 COPY package*.json ./
 
@@ -13,7 +16,7 @@ RUN npm ci --only=production
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p database public/css
+RUN mkdir -p database public/css repos
 
 # Set environment variables
 ENV NODE_ENV=production
