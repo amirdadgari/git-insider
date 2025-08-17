@@ -8,9 +8,63 @@ class GitService {
     constructor() {
         this.db = new Database();
         this.repositories = new Map();
+        // Cache of simple-git instances by repo path (workspace-scanned repos)
+        this.gitByPath = new Map();
+        // In-memory cache for workspace repository discovery
+        this.workspaceRepoCache = new Map(); // key -> { expiresAt:number, repos:array }
+        this.workspaceRepoCacheTTL = Math.max(30, parseInt(process.env.WORKSPACE_REPO_CACHE_TTL_SECONDS || '300', 10));
+        // Concurrency for parallel git operations
+        this.gitConcurrency = Math.max(1, parseInt(process.env.GIT_CONCURRENCY || '8', 10));
     }
 
     // Internal helpers reused across methods
+    // Concurrency-limited mapper
+    async _mapConcurrent(items, mapper, limit) {
+        const concurrency = Math.max(1, parseInt(limit || this.gitConcurrency, 10));
+        let index = 0;
+        const results = [];
+        const workers = Array.from({ length: Math.min(concurrency, items.length || 0) }, async () => {
+            while (true) {
+                const i = index++;
+                if (i >= items.length) return;
+                results[i] = await mapper(items[i], i);
+            }
+        });
+        await Promise.all(workers);
+        return results;
+    }
+
+    _normalizeScanOptions(options = {}) {
+        const { maxDepth = 4, exclude = ['node_modules', '.git', '.hg', '.svn', 'dist', 'build', '.next'], followSymlinks = false } = options;
+        const normExclude = Array.isArray(exclude) ? [...exclude].sort((a,b)=>String(a).localeCompare(String(b))) : [];
+        return { maxDepth, exclude: normExclude, followSymlinks: !!followSymlinks };
+    }
+
+    _workspaceCacheKey(rootPath, options = {}) {
+        const norm = this._normalizeScanOptions(options);
+        return `${path.resolve(rootPath)}::${JSON.stringify(norm)}`;
+    }
+
+    async _getWorkspaceReposCached(rootPath, options = {}) {
+        const key = this._workspaceCacheKey(rootPath, options);
+        const now = Date.now();
+        const cached = this.workspaceRepoCache.get(key);
+        if (cached && cached.expiresAt > now) {
+            return cached.repos;
+        }
+        const repos = await this.scanForRepositories(rootPath, options);
+        this.workspaceRepoCache.set(key, { expiresAt: now + this.workspaceRepoCacheTTL * 1000, repos });
+        return repos;
+    }
+
+    async _getGitForPath(repoPath) {
+        const normalized = path.resolve(repoPath);
+        if (this.gitByPath.has(normalized)) return this.gitByPath.get(normalized);
+        const git = simpleGit(normalized);
+        await git.raw(['rev-parse', '--git-dir']);
+        this.gitByPath.set(normalized, git);
+        return git;
+    }
     async _resolveGitConfigPath(dir) {
         const dotGitPath = path.join(dir, '.git');
         try {
@@ -222,17 +276,16 @@ class GitService {
         const startBound = startDate ? moment(startDate, 'YYYY-MM-DD').startOf('day').toDate() : null;
         const endBound = endDate ? moment(endDate, 'YYYY-MM-DD').endOf('day').toDate() : null;
 
-        for (const [repoId, repo] of this.repositories) {
-            if (repoFilter && !repoFilter.has(repoId)) continue;
+        const entries = Array.from(this.repositories.entries()).filter(([repoId]) => !repoFilter || repoFilter.has(repoId));
 
+        const tasks = entries.map(([repoId, repo]) => async () => {
             try {
                 const format = {
                     hash: '%H',
                     author: '%an',
                     authorEmail: '%ae',
-                    date: '%ai',
-                    message: '%s',
-                    body: '%b'
+                    date: '%at',
+                    message: '%s'
                 };
 
                 const customArgs = [];
@@ -241,81 +294,163 @@ class GitService {
                 if (endDate) customArgs.push(`--until=${endDate}`);
 
                 const log = await repo.git.log({ format }, customArgs);
-                
+                const results = [];
                 for (const commit of log.all) {
-                    const cDate = new Date(commit.date);
+                    const ts = Number(commit.date) * 1000;
+                    const cDate = new Date(ts);
                     if (startBound && cDate < startBound) continue;
                     if (endBound && cDate > endBound) continue;
-                    commits.push({
+                    results.push({
                         repository: repo.display_name || repo.name,
                         repositoryId: repoId,
                         hash: commit.hash,
                         author: commit.author || commit.author_name,
                         authorEmail: commit.authorEmail || commit.author_email,
-                        date: commit.date,
-                        message: commit.message,
-                        body: commit.body
+                        date: new Date(ts).toISOString(),
+                        message: commit.message
                     });
                 }
+                return results;
             } catch (error) {
                 console.error(`Error getting commits from ${repo.name}:`, error.message);
+                return [];
             }
-        }
+        });
 
+        const grouped = await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+        for (const arr of grouped) commits.push(...arr);
+        return commits.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
+    // Grep-based commit search across registered repositories (by DB)
+    async searchCommits({ query, userPattern = null, startDate = null, endDate = null, repositoryIds = null, options = {} }) {
+        if (!query || !String(query).trim()) return [];
+        const commits = [];
+        const repoFilter = repositoryIds ? new Set(repositoryIds) : null;
+        const startBound = startDate ? moment(startDate, 'YYYY-MM-DD').startOf('day').toDate() : null;
+        const endBound = endDate ? moment(endDate, 'YYYY-MM-DD').endOf('day').toDate() : null;
+        const excludeMerges = String(process.env.GIT_EXCLUDE_MERGES || 'true').toLowerCase() === 'true';
+
+        const entries = Array.from(this.repositories.entries()).filter(([repoId]) => !repoFilter || repoFilter.has(repoId));
+
+        const perRepoMax = options && options.limit
+            ? Math.max(10, Math.ceil(options.limit / Math.max(1, entries.length)) + 5)
+            : null;
+
+        const tasks = entries.map(([repoId, repo]) => async () => {
+            try {
+                const format = {
+                    hash: '%H',
+                    author: '%an',
+                    authorEmail: '%ae',
+                    date: '%at',
+                    message: '%s'
+                };
+                const customArgs = [
+                    `--grep=${query}`,
+                    '-i'
+                ];
+                if (userPattern) customArgs.push(`--author=${userPattern}`);
+                if (startDate) customArgs.push(`--since=${startDate}`);
+                if (endDate) customArgs.push(`--until=${endDate}`);
+                if (excludeMerges) customArgs.push('--no-merges');
+                if (perRepoMax) customArgs.push(`--max-count=${perRepoMax}`);
+
+                const log = await repo.git.log({ format }, customArgs);
+                const results = [];
+                for (const commit of log.all) {
+                    const ts = Number(commit.date) * 1000;
+                    const cDate = new Date(ts);
+                    if (startBound && cDate < startBound) continue;
+                    if (endBound && cDate > endBound) continue;
+                    results.push({
+                        repository: repo.display_name || repo.name,
+                        repositoryId: repoId,
+                        hash: commit.hash,
+                        author: commit.author || commit.author_name,
+                        authorEmail: commit.authorEmail || commit.author_email,
+                        date: new Date(ts).toISOString(),
+                        message: commit.message
+                    });
+                }
+                return results;
+            } catch (error) {
+                console.error(`Error searching commits in ${repo.name}:`, error.message);
+                return [];
+            }
+        });
+
+        const grouped = await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+        for (const arr of grouped) commits.push(...arr);
         return commits.sort((a, b) => new Date(b.date) - new Date(a.date));
     }
 
     // Get commits across all repositories found under saved workspaces
-    async getCommitsFromWorkspaces(userPattern, startDate, endDate, includeUnnamed = false) {
+    async getCommitsFromWorkspaces(userPattern, startDate, endDate, includeUnnamed = false, options = {}) {
         const commits = [];
         const startBound = startDate ? moment(startDate, 'YYYY-MM-DD').startOf('day').toDate() : null;
         const endBound = endDate ? moment(endDate, 'YYYY-MM-DD').endOf('day').toDate() : null;
+        const excludeMerges = String(process.env.GIT_EXCLUDE_MERGES || 'true').toLowerCase() === 'true';
+        const defaultSinceDays = parseInt(process.env.DEFAULT_SINCE_DAYS || '0', 10);
+        const effectiveStart = startDate || (defaultSinceDays > 0 ? moment().subtract(defaultSinceDays, 'days').format('YYYY-MM-DD') : null);
+
         try {
             const workspaces = await this.getWorkspaces();
             for (const ws of workspaces) {
                 try {
-                    const repos = await this.scanForRepositories(ws.root_path, {});
+                    const repos = await this._getWorkspaceReposCached(ws.root_path, {});
                     const reposToUse = includeUnnamed ? repos : repos.filter(r => r.displayName);
-                    for (const repoInfo of reposToUse) {
-                        try {
-                            const git = simpleGit(repoInfo.path);
-                            await git.raw(['rev-parse', '--git-dir']);
+                    if (!reposToUse.length) continue;
 
+                    const perRepoMax = options && options.limit
+                        ? Math.max(10, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
+                        : null;
+
+                    const tasks = reposToUse.map(repoInfo => async () => {
+                        try {
+                            const git = await this._getGitForPath(repoInfo.path);
                             const format = {
                                 hash: '%H',
                                 author: '%an',
                                 authorEmail: '%ae',
-                                date: '%ai',
-                                message: '%s',
-                                body: '%b'
+                                date: '%at',
+                                message: '%s'
                             };
 
                             const customArgs = [];
                             if (userPattern) customArgs.push(`--author=${userPattern}`);
-                            if (startDate) customArgs.push(`--since=${startDate}`);
+                            if (effectiveStart) customArgs.push(`--since=${effectiveStart}`);
                             if (endDate) customArgs.push(`--until=${endDate}`);
+                            if (excludeMerges) customArgs.push('--no-merges');
+                            if (perRepoMax) customArgs.push(`--max-count=${perRepoMax}`);
 
                             const log = await git.log({ format }, customArgs);
+                            const results = [];
                             for (const commit of log.all) {
-                                const cDate = new Date(commit.date);
+                                const ts = Number(commit.date) * 1000;
+                                const cDate = new Date(ts);
                                 if (startBound && cDate < startBound) continue;
                                 if (endBound && cDate > endBound) continue;
-                                commits.push({
+                                results.push({
                                     repository: repoInfo.displayName || repoInfo.name,
                                     repositoryId: null,
                                     repositoryPath: repoInfo.path,
                                     hash: commit.hash,
                                     author: commit.author || commit.author_name,
                                     authorEmail: commit.authorEmail || commit.author_email,
-                                    date: commit.date,
-                                    message: commit.message,
-                                    body: commit.body
+                                    date: new Date(ts).toISOString(),
+                                    message: commit.message
                                 });
                             }
+                            return results;
                         } catch (innerErr) {
                             console.error(`Error getting commits from ${repoInfo.path}:`, innerErr.message);
+                            return [];
                         }
-                    }
+                    });
+
+                    const grouped = await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+                    for (const arr of grouped) commits.push(...arr);
                 } catch (scanErr) {
                     console.error(`Error scanning workspace ${ws.root_path}:`, scanErr.message);
                 }
@@ -436,38 +571,49 @@ class GitService {
     }
 
     // Get code changes across repositories found under saved workspaces
-    async getCodeChangesFromWorkspaces(userPattern, startDate, endDate, includeUnnamed = false) {
+    async getCodeChangesFromWorkspaces(userPattern, startDate, endDate, includeUnnamed = false, options = {}) {
         const changes = [];
         const startBound = startDate ? moment(startDate, 'YYYY-MM-DD').startOf('day').toDate() : null;
         const endBound = endDate ? moment(endDate, 'YYYY-MM-DD').endOf('day').toDate() : null;
+        const excludeMerges = String(process.env.GIT_EXCLUDE_MERGES || 'true').toLowerCase() === 'true';
+        const defaultSinceDays = parseInt(process.env.DEFAULT_SINCE_DAYS || '0', 10);
+        const effectiveStart = startDate || (defaultSinceDays > 0 ? moment().subtract(defaultSinceDays, 'days').format('YYYY-MM-DD') : null);
 
         try {
             const workspaces = await this.getWorkspaces();
             for (const ws of workspaces) {
                 try {
-                    const repos = await this.scanForRepositories(ws.root_path, {});
+                    const repos = await this._getWorkspaceReposCached(ws.root_path, {});
                     const reposToUse = includeUnnamed ? repos : repos.filter(r => r.displayName);
-                    for (const repoInfo of reposToUse) {
+                    if (!reposToUse.length) continue;
+
+                    const perRepoMax = options && options.limit
+                        ? Math.max(10, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
+                        : null;
+
+                    const tasks = reposToUse.map(repoInfo => async () => {
                         try {
-                            const git = simpleGit(repoInfo.path);
-                            await git.raw(['rev-parse', '--git-dir']);
-
-                            const options = [
+                            const git = await this._getGitForPath(repoInfo.path);
+                            const logArgs = [
+                                'log',
                                 '--numstat',
-                                '--pretty=format:%H|%an|%ae|%ai|%s'
+                                '--pretty=format:%H|%an|%ae|%at|%s'
                             ];
+                            if (userPattern) logArgs.push(`--author=${userPattern}`);
+                            if (effectiveStart) logArgs.push(`--since=${effectiveStart}`);
+                            if (endDate) logArgs.push(`--until=${endDate}`);
+                            if (excludeMerges) logArgs.push('--no-merges');
+                            if (perRepoMax) logArgs.push(`--max-count=${perRepoMax}`);
 
-                            if (userPattern) options.push(`--author=${userPattern}`);
-                            if (startDate) options.push(`--since=${startDate}`);
-                            if (endDate) options.push(`--until=${endDate}`);
-
-                            const log = await git.raw(['log', ...options]);
+                            const log = await git.raw(logArgs);
                             const lines = log.split('\n');
 
                             let currentCommit = null;
                             for (const line of lines) {
                                 if (line.includes('|') && !line.match(/^\d+\s+\d+\s+/)) {
-                                    const [hash, author, email, date, message] = line.split('|');
+                                    const [hash, author, email, atSeconds, message] = line.split('|');
+                                    const ts = Number(atSeconds) * 1000;
+                                    const iso = new Date(ts).toISOString();
                                     currentCommit = {
                                         repository: repoInfo.displayName || repoInfo.name,
                                         repositoryId: null,
@@ -475,11 +621,11 @@ class GitService {
                                         hash,
                                         author,
                                         email,
-                                        date,
+                                        date: iso,
                                         message,
                                         files: []
                                     };
-                                    const cDate = new Date(date);
+                                    const cDate = new Date(ts);
                                     if ((startBound && cDate < startBound) || (endBound && cDate > endBound)) {
                                         currentCommit = null;
                                     } else {
@@ -494,10 +640,14 @@ class GitService {
                                     });
                                 }
                             }
+                            return true;
                         } catch (innerErr) {
                             console.error(`Error getting code changes from ${repoInfo.path}:`, innerErr.message);
+                            return false;
                         }
-                    }
+                    });
+
+                    await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
                 } catch (scanErr) {
                     console.error(`Error scanning workspace ${ws.root_path}:`, scanErr.message);
                 }
@@ -566,7 +716,8 @@ class GitService {
     async getAllGitUsers() {
         const users = new Set();
 
-        for (const [repoId, repo] of this.repositories) {
+        const entries = Array.from(this.repositories.entries());
+        const tasks = entries.map(([repoId, repo]) => async () => {
             try {
                 const log = await repo.git.log({
                     format: {
@@ -584,8 +735,9 @@ class GitService {
             } catch (error) {
                 console.error(`Error getting users from ${repo.name}:`, error.message);
             }
-        }
+        });
 
+        await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
         return Array.from(users).map(user => JSON.parse(user));
     }
 

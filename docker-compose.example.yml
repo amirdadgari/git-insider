@@ -13,6 +13,11 @@ services:
     ports:
       - "3201:3201"  # host:container
 
+    env_file:
+      - .env
+    
+    user: "${UID:-1000}:${GID:-1000}"
+
     environment:
       # Runtime environment
       - NODE_ENV=production

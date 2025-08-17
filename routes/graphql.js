@@ -173,7 +173,16 @@ const resolvers = {
       else if (Array.isArray(users) && users.length) userPattern = users.join('|');
 
       // Always fetch across saved Work Spaces
-      let commits = await gitService.getCommitsFromWorkspaces(userPattern, startDate, endDate, !!includeUnnamed);
+      const pg = Math.max(1, parseInt(page || 1, 10));
+      const lm = limit ? Math.max(1, parseInt(limit, 10)) : null;
+      const earlyLimit = lm ? pg * lm : null;
+      let commits = await gitService.getCommitsFromWorkspaces(
+        userPattern,
+        startDate,
+        endDate,
+        !!includeUnnamed,
+        earlyLimit ? { limit: earlyLimit } : {}
+      );
 
       if (limit) {
         const pg = Math.max(1, parseInt(page || 1, 10));
@@ -193,7 +202,16 @@ const resolvers = {
       else if (Array.isArray(users) && users.length) userPattern = users.join('|');
 
       // Always fetch across saved Work Spaces
-      let changes = await gitService.getCodeChangesFromWorkspaces(userPattern, startDate, endDate, !!includeUnnamed);
+      const pg = Math.max(1, parseInt(page || 1, 10));
+      const lm = limit ? Math.max(1, parseInt(limit, 10)) : null;
+      const earlyLimit = lm ? pg * lm : null;
+      let changes = await gitService.getCodeChangesFromWorkspaces(
+        userPattern,
+        startDate,
+        endDate,
+        !!includeUnnamed,
+        earlyLimit ? { limit: earlyLimit } : {}
+      );
 
       if (limit) {
         const pg = Math.max(1, parseInt(page || 1, 10));

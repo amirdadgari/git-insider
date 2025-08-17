@@ -169,11 +169,15 @@ router.get('/commits', authenticate, async (req, res) => {
 
         // Always search across all repositories found under saved workspaces
         const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
+        const pgNum = Math.max(1, parseInt(page, 10) || 1);
+        const lmNum = Math.max(1, parseInt(limit, 10) || 50);
+        const earlyLimit = pgNum * lmNum;
         let commits = await gitService.getCommitsFromWorkspaces(
             userPattern,
             startDate,
             endDate,
-            includeUnnamedBool
+            includeUnnamedBool,
+            { limit: earlyLimit }
         );
 
         // Simple pagination
@@ -246,11 +250,15 @@ router.get('/code-changes', authenticate, async (req, res) => {
 
         // Always search across all repositories found under saved workspaces
         const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
+        const pgNum = Math.max(1, parseInt(page, 10) || 1);
+        const lmNum = Math.max(1, parseInt(limit, 10) || 50);
+        const earlyLimit = pgNum * lmNum;
         let changes = await gitService.getCodeChangesFromWorkspaces(
             userPattern,
             startDate,
             endDate,
-            includeUnnamedBool
+            includeUnnamedBool,
+            { limit: earlyLimit }
         );
 
         // Simple pagination
@@ -322,31 +330,36 @@ router.get('/repositories/:id/branches', authenticate, async (req, res) => {
 router.get('/search/commits', authenticate, async (req, res) => {
     try {
         const { query, repositories, startDate, endDate, page = 1, limit = 50 } = req.query;
-        
+
         if (!query) {
             return res.status(400).json({ error: 'Search query is required' });
         }
 
         const repositoryIds = repositories ? repositories.split(',').map(id => parseInt(id.trim())) : null;
+        const pgNum = Math.max(1, parseInt(page, 10) || 1);
+        const lmNum = Math.max(1, parseInt(limit, 10) || 50);
+        const earlyLimit = pgNum * lmNum;
 
-        // Get all commits and filter by message
-        const allCommits = await gitService.getCommitsByUser(null, startDate, endDate, repositoryIds);
-        const filteredCommits = allCommits.filter(commit => 
-            commit.message.toLowerCase().includes(query.toLowerCase()) ||
-            (commit.body && commit.body.toLowerCase().includes(query.toLowerCase()))
-        );
+        const results = await gitService.searchCommits({
+            query,
+            userPattern: null,
+            startDate,
+            endDate,
+            repositoryIds,
+            options: { limit: earlyLimit }
+        });
 
         // Simple pagination
-        const offset = (page - 1) * limit;
-        const paginatedCommits = filteredCommits.slice(offset, offset + parseInt(limit));
+        const offset = (pgNum - 1) * lmNum;
+        const paginatedCommits = results.slice(offset, offset + lmNum);
 
         res.json({
             commits: paginatedCommits,
             pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
-                total: filteredCommits.length,
-                totalPages: Math.ceil(filteredCommits.length / limit)
+                page: pgNum,
+                limit: lmNum,
+                total: results.length,
+                totalPages: Math.ceil(results.length / lmNum)
             }
         });
     } catch (error) {
