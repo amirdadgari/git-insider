@@ -91,7 +91,11 @@ Notes:
   - Paginates server-side by slicing results.
 
 - GET `/api/git/commits`
-  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`
+  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `noCache?=true|false`
+  - Behavior:
+    - By default, an in-memory, month-based cache is used for named repositories to speed up results.
+    - Set `noCache=true` to bypass the cache and fetch fresh data directly from git.
+    - Cache auto-refreshes for the current month approximately every 15 minutes (configurable via `COMMIT_MONTH_CACHE_TTL_SECONDS`).
   - Always searches across repositories discovered under saved Work Spaces.
   - Response: `{ commits: Commit[], pagination: { page, limit, total, totalPages } }`
 

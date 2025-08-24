@@ -33,6 +33,7 @@ class GitAnalytics {
         const startDate = document.getElementById('commits-start-date').value;
         const endDate = document.getElementById('commits-end-date').value;
         const repository = document.getElementById('commits-repository').value;
+        const includeUnnamed = document.getElementById('commits-include-unnamed')?.checked;
 
         const params = new URLSearchParams({
             page: page.toString(),
@@ -45,6 +46,7 @@ class GitAnalytics {
         if (repository) {
             params.append('repositories', repository);
         }
+        if (includeUnnamed) params.append('includeUnnamed', 'true');
 
         app.showLoading();
 
@@ -477,6 +479,8 @@ class GitAnalytics {
         document.getElementById('commits-start-date').value = '';
         document.getElementById('commits-end-date').value = '';
         document.getElementById('commits-repository').value = '';
+        const includeUnnamedEl = document.getElementById('commits-include-unnamed');
+        if (includeUnnamedEl) includeUnnamedEl.checked = false;
         
         // Clear results
         document.getElementById('commits-results').innerHTML = '';

@@ -23,7 +23,8 @@ Below reflects `routes/graphql.js` schema.
   repositories: [Int!],
   page: Int,
   limit: Int,
-  includeUnnamed: Boolean
+  includeUnnamed: Boolean,
+  noCache: Boolean
 ): [Commit!]!
 - codeChanges(
   user: String,
@@ -48,6 +49,7 @@ Below reflects `routes/graphql.js` schema.
 Notes:
 - Commits and CodeChanges always search across saved Work Spaces; `repositories` arg is currently not used for filtering.
 - By default, only repositories with a GitLab project name (`display_name`) are included. Set `includeUnnamed: true` to include repositories without a saved name.
+- A month-based in-memory cache is used for named repositories by default. Set `noCache: true` to bypass the cache and fetch directly from git.
 - Pagination for list queries is simple in-memory slicing when `limit` is provided; `page` defaults to 1 when used.
 - Dates are ISO-8601 strings (e.g., `2024-01-01`). Ranges are inclusive.
 
@@ -74,6 +76,17 @@ curl -sS http://localhost:3201/api/graphql \
   --data '{
     "query": "query($user:String,$page:Int,$limit:Int){ commits(user:$user,page:$page,limit:$limit){ repository hash author date message } }",
     "variables": {"user":"alice","page":1,"limit":20}
+  }'
+```
+
+Fetch commits bypassing cache:
+```bash
+curl -sS http://localhost:3201/api/graphql \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: YOUR_TOKEN_HERE' \
+  --data '{
+    "query": "query($user:String,$noCache:Boolean){ commits(user:$user, noCache:$noCache){ repository hash author date message } }",
+    "variables": {"user":"alice","noCache":true}
   }'
 ```
 

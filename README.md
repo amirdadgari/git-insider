@@ -40,6 +40,13 @@ From `./.env.example`:
 - `ADMIN_PASSWORD=admin123`
 - `GIT_REPOS_PATH=./repos`
 
+Performance tuning (optional):
+- `WORKSPACE_REPO_CACHE_TTL_SECONDS=300` TTL for workspace repository discovery cache
+- `COMMIT_MONTH_CACHE_TTL_SECONDS=900` TTL for month-based commit cache (default ~15 minutes)
+- `GIT_CONCURRENCY=8` Max concurrent git commands
+- `GIT_EXCLUDE_MERGES=true` Exclude merge commits by default
+- `DEFAULT_SINCE_DAYS=0` If no startDate is provided, limit scans to the last N days (0 disables)
+
 ## Running
 - Dev server:
   ```bash

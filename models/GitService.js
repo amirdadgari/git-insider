@@ -15,6 +15,10 @@ class GitService {
         this.workspaceRepoCacheTTL = Math.max(30, parseInt(process.env.WORKSPACE_REPO_CACHE_TTL_SECONDS || '300', 10));
         // Concurrency for parallel git operations
         this.gitConcurrency = Math.max(1, parseInt(process.env.GIT_CONCURRENCY || '8', 10));
+        // In-memory month cache for commits across workspaces (named repos only)
+        // Map<YYYY-MM, { commits: array, expiresAt: number, updatedAt: number, approxBytes: number }>
+        this.commitMonthCache = new Map();
+        this.commitMonthCacheTTL = Math.max(60, parseInt(process.env.COMMIT_MONTH_CACHE_TTL_SECONDS || '900', 10)); // default 15 minutes
     }
 
     // Internal helpers reused across methods
@@ -55,6 +59,136 @@ class GitService {
         const repos = await this.scanForRepositories(rootPath, options);
         this.workspaceRepoCache.set(key, { expiresAt: now + this.workspaceRepoCacheTTL * 1000, repos });
         return repos;
+    }
+
+    // ----- Commit Month Cache Helpers -----
+    _estimateBytes(obj) {
+        try {
+            return Buffer.byteLength(JSON.stringify(obj), 'utf8');
+        } catch {
+            return 0;
+        }
+    }
+
+    _logCommitCacheUsage() {
+        let total = 0;
+        for (const v of this.commitMonthCache.values()) total += v.approxBytes || 0;
+        const mb = (total / (1024 * 1024)).toFixed(2);
+        console.log(`[cache] Commit month cache: ${this.commitMonthCache.size} month(s), ~${mb} MB`);
+    }
+
+    _listMonthsBetween(startMoment, endMoment) {
+        const months = [];
+        const end = endMoment ? endMoment.clone().endOf('month') : moment();
+        let cur = startMoment ? startMoment.clone().startOf('month') : end.clone().startOf('month');
+        while (cur.isSameOrBefore(end)) {
+            months.push({ key: cur.format('YYYY-MM'), start: cur.clone().startOf('month'), end: cur.clone().endOf('month') });
+            cur = cur.add(1, 'month');
+        }
+        return months;
+    }
+
+    _isCacheExpired(entry) {
+        const now = Date.now();
+        return !entry || (entry.expiresAt || 0) < now;
+    }
+
+    _selectNamedReposOnly(repos) {
+        // Only exclude repos that have a GitLab config but no name; others are treated as named by folder
+        return repos.filter(r => !(r.hasGitlabConfig && !r.displayName));
+    }
+
+    async _buildMonthCommits(monthKey) {
+        const excludeMerges = String(process.env.GIT_EXCLUDE_MERGES || 'true').toLowerCase() === 'true';
+        const [y, m] = monthKey.split('-').map(n => parseInt(n, 10));
+        const monthStart = moment({ year: y, month: m - 1, day: 1 }).startOf('month');
+        const monthEnd = monthStart.clone().endOf('month');
+
+        const sinceStr = monthStart.format('YYYY-MM-DD');
+        const untilStr = monthEnd.format('YYYY-MM-DD');
+
+        const commits = [];
+        try {
+            const workspaces = await this.getWorkspaces();
+            for (const ws of workspaces) {
+                try {
+                    const repos = await this._getWorkspaceReposCached(ws.root_path, {});
+                    const reposToUse = this._selectNamedReposOnly(repos);
+                    if (!reposToUse.length) continue;
+
+                    const tasks = reposToUse.map(repoInfo => async () => {
+                        try {
+                            const git = await this._getGitForPath(repoInfo.path);
+                            const format = { hash: '%H', author: '%an', authorEmail: '%ae', date: '%at', message: '%s' };
+                            const args = [];
+                            args.push(`--since=${sinceStr}`);
+                            args.push(`--until=${untilStr}`);
+                            if (excludeMerges) args.push('--no-merges');
+                            args.push('--date=unix');
+
+                            const log = await git.log({ format }, args);
+                            const arr = [];
+                            for (const c of log.all) {
+                                let ts = Number(c.date);
+                                if (!Number.isFinite(ts)) {
+                                    const parsed = Date.parse(c.date);
+                                    ts = Number.isFinite(parsed) ? parsed : NaN;
+                                } else {
+                                    ts = ts * 1000;
+                                }
+                                const d = new Date(ts);
+                                if (isNaN(d.getTime())) continue;
+                                arr.push({
+                                    repository: repoInfo.displayName || repoInfo.name,
+                                    repositoryId: null,
+                                    repositoryPath: repoInfo.path,
+                                    hash: c.hash,
+                                    author: c.author || c.author_name,
+                                    authorEmail: c.authorEmail || c.author_email,
+                                    date: d.toISOString(),
+                                    message: c.message
+                                });
+                            }
+                            return arr;
+                        } catch (e) {
+                            console.error(`Error building month cache from ${repoInfo.path}:`, e.message);
+                            return [];
+                        }
+                    });
+
+                    const grouped = await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+                    for (const g of grouped) commits.push(...g);
+                } catch (e) {
+                    console.error(`Error scanning workspace for month cache ${ws.root_path}:`, e.message);
+                }
+            }
+        } catch (e) {
+            console.error('Error building month commits:', e.message);
+        }
+        return commits.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
+    async _getOrRefreshMonthCacheAsync(monthKey, isCurrent) {
+        const now = Date.now();
+        let entry = this.commitMonthCache.get(monthKey);
+        const expired = this._isCacheExpired(entry);
+        if (!entry || expired) {
+            const commits = await this._buildMonthCommits(monthKey);
+            entry = {
+                commits,
+                updatedAt: now,
+                expiresAt: now + this.commitMonthCacheTTL * 1000,
+                approxBytes: this._estimateBytes(commits)
+            };
+            this.commitMonthCache.set(monthKey, entry);
+            this._logCommitCacheUsage();
+            return entry.commits;
+        }
+        // Keep current month warm by extending TTL on access
+        if (isCurrent) {
+            entry.expiresAt = now + this.commitMonthCacheTTL * 1000;
+        }
+        return entry.commits;
     }
 
     async _getGitForPath(repoPath) {
@@ -393,64 +527,116 @@ class GitService {
         const excludeMerges = String(process.env.GIT_EXCLUDE_MERGES || 'true').toLowerCase() === 'true';
         const defaultSinceDays = parseInt(process.env.DEFAULT_SINCE_DAYS || '0', 10);
         const effectiveStart = startDate || (defaultSinceDays > 0 ? moment().subtract(defaultSinceDays, 'days').format('YYYY-MM-DD') : null);
+        const noCache = !!(options && options.noCache);
+
+        // Always keep the current month's cache warm/updated
+        try {
+            const currentKey = moment().format('YYYY-MM');
+            await this._getOrRefreshMonthCacheAsync(currentKey, true);
+        } catch (e) {
+            // best-effort warming; ignore errors
+        }
 
         try {
             const workspaces = await this.getWorkspaces();
             for (const ws of workspaces) {
                 try {
                     const repos = await this._getWorkspaceReposCached(ws.root_path, {});
-                    const reposToUse = includeUnnamed ? repos : repos.filter(r => r.displayName);
+                    // Only exclude repos that have a GitLab config but no name; others are treated as named by folder
+                    const reposToUse = includeUnnamed ? repos : repos.filter(r => !(r.hasGitlabConfig && !r.displayName));
                     if (!reposToUse.length) continue;
 
+                    // When using cache (default), fetch per-month cached named commits and filter locally.
+                    // If noCache is true OR includeUnnamed is true, fall back to direct git calls for accuracy.
                     const perRepoMax = options && options.limit
                         ? Math.max(10, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
                         : null;
 
-                    const tasks = reposToUse.map(repoInfo => async () => {
-                        try {
-                            const git = await this._getGitForPath(repoInfo.path);
-                            const format = {
-                                hash: '%H',
-                                author: '%an',
-                                authorEmail: '%ae',
-                                date: '%at',
-                                message: '%s'
-                            };
-
-                            const customArgs = [];
-                            if (userPattern) customArgs.push(`--author=${userPattern}`);
-                            if (effectiveStart) customArgs.push(`--since=${effectiveStart}`);
-                            if (endDate) customArgs.push(`--until=${endDate}`);
-                            if (excludeMerges) customArgs.push('--no-merges');
-                            if (perRepoMax) customArgs.push(`--max-count=${perRepoMax}`);
-
-                            const log = await git.log({ format }, customArgs);
-                            const results = [];
-                            for (const commit of log.all) {
-                                const ts = Number(commit.date) * 1000;
-                                const cDate = new Date(ts);
-                                if (startBound && cDate < startBound) continue;
-                                if (endBound && cDate > endBound) continue;
-                                results.push({
-                                    repository: repoInfo.displayName || repoInfo.name,
-                                    repositoryId: null,
-                                    repositoryPath: repoInfo.path,
-                                    hash: commit.hash,
-                                    author: commit.author || commit.author_name,
-                                    authorEmail: commit.authorEmail || commit.author_email,
-                                    date: new Date(ts).toISOString(),
-                                    message: commit.message
-                                });
+                    if (!noCache && !includeUnnamed) {
+                        // Determine covered months
+                        const s = startBound ? moment(startBound) : (effectiveStart ? moment(effectiveStart, 'YYYY-MM-DD').startOf('day') : null);
+                        const e = endBound ? moment(endBound) : moment();
+                        const months = this._listMonthsBetween(s, e);
+                        // Always warm current month cache as well
+                        const currentKey = moment().format('YYYY-MM');
+                        const keys = Array.from(new Set([...months.map(m => m.key), currentKey]));
+                        const monthArrays = await Promise.all(keys.map(k => this._getOrRefreshMonthCacheAsync(k, k === currentKey)));
+                        const monthCommits = monthArrays.flat();
+                        // Filter by author/date and workspace repos selected
+                        const repoPathsSet = new Set(reposToUse.map(r => r.path));
+                        for (const c of monthCommits) {
+                            // Restrict to repos in this workspace iteration
+                            if (!repoPathsSet.has(c.repositoryPath)) continue;
+                            const cDate = new Date(c.date);
+                            if (startBound && cDate < startBound) continue;
+                            if (endBound && cDate > endBound) continue;
+                            if (userPattern) {
+                                const re = new RegExp(userPattern);
+                                if (!re.test(String(c.author)) && !re.test(String(c.authorEmail))) continue;
                             }
-                            return results;
-                        } catch (innerErr) {
-                            console.error(`Error getting commits from ${repoInfo.path}:`, innerErr.message);
-                            return [];
+                            commits.push(c);
                         }
-                    });
+                        // Apply soft perRepoMax only as a global limiter after sorting below
+                    } else {
+                        const tasks = reposToUse.map(repoInfo => async () => {
+                            try {
+                                const git = await this._getGitForPath(repoInfo.path);
+                                const format = {
+                                    hash: '%H',
+                                    author: '%an',
+                                    authorEmail: '%ae',
+                                    date: '%at',
+                                    message: '%s'
+                                };
 
-                    const grouped = await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
-                    for (const arr of grouped) commits.push(...arr);
+                                const customArgs = [];
+                                if (userPattern) customArgs.push(`--author=${userPattern}`);
+                                if (effectiveStart) customArgs.push(`--since=${effectiveStart}`);
+                                if (endDate) customArgs.push(`--until=${endDate}`);
+                                if (excludeMerges) customArgs.push('--no-merges');
+                                if (perRepoMax) customArgs.push(`--max-count=${perRepoMax}`);
+                                // Ensure git formats dates consistently
+                                customArgs.push('--date=unix');
+
+                                const log = await git.log({ format }, customArgs);
+                                const results = [];
+                                for (const commit of log.all) {
+                                    // Robust timestamp handling: prefer unix seconds, fallback to Date.parse, otherwise skip
+                                    let ts = Number(commit.date);
+                                    if (!Number.isFinite(ts)) {
+                                        const parsed = Date.parse(commit.date);
+                                        ts = Number.isFinite(parsed) ? parsed : NaN;
+                                    } else {
+                                        ts = ts * 1000; // convert seconds to ms
+                                    }
+                                    const cDate = new Date(ts);
+                                    if (isNaN(cDate.getTime())) {
+                                        console.warn(`Skipping commit with invalid date in ${repoInfo.path}: ${commit.hash} (${commit.date})`);
+                                        continue;
+                                    }
+                                    if (startBound && cDate < startBound) continue;
+                                    if (endBound && cDate > endBound) continue;
+                                    results.push({
+                                        repository: repoInfo.displayName || repoInfo.name,
+                                        repositoryId: null,
+                                        repositoryPath: repoInfo.path,
+                                        hash: commit.hash,
+                                        author: commit.author || commit.author_name,
+                                        authorEmail: commit.authorEmail || commit.author_email,
+                                        date: cDate.toISOString(),
+                                        message: commit.message
+                                    });
+                                }
+                                return results;
+                            } catch (innerErr) {
+                                console.error(`Error getting commits from ${repoInfo.path}:`, innerErr.message);
+                                return [];
+                            }
+                        });
+
+                        const grouped = await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+                        for (const arr of grouped) commits.push(...arr);
+                    }
                 } catch (scanErr) {
                     console.error(`Error scanning workspace ${ws.root_path}:`, scanErr.message);
                 }
@@ -459,7 +645,12 @@ class GitService {
             console.error('Error getting commits from workspaces:', error.message);
         }
 
-        return commits.sort((a, b) => new Date(b.date) - new Date(a.date));
+        // Global limit (post-sort)
+        let sorted = commits.sort((a, b) => new Date(b.date) - new Date(a.date));
+        if (options && options.limit && Number.isFinite(options.limit)) {
+            sorted = sorted.slice(0, Math.max(1, parseInt(options.limit, 10)));
+        }
+        return sorted;
     }
 
     async getCommitDetails(repositoryId, commitHash) {
@@ -584,7 +775,8 @@ class GitService {
             for (const ws of workspaces) {
                 try {
                     const repos = await this._getWorkspaceReposCached(ws.root_path, {});
-                    const reposToUse = includeUnnamed ? repos : repos.filter(r => r.displayName);
+                    // Only exclude repos that have a GitLab config but no name; others are treated as named by folder
+                    const reposToUse = includeUnnamed ? repos : repos.filter(r => !(r.hasGitlabConfig && !r.displayName));
                     if (!reposToUse.length) continue;
 
                     const perRepoMax = options && options.limit
@@ -604,6 +796,8 @@ class GitService {
                             if (endDate) logArgs.push(`--until=${endDate}`);
                             if (excludeMerges) logArgs.push('--no-merges');
                             if (perRepoMax) logArgs.push(`--max-count=${perRepoMax}`);
+                            // Ensure date output is in unix time for consistency
+                            logArgs.push('--date=unix');
 
                             const log = await git.raw(logArgs);
                             const lines = log.split('\n');
@@ -612,8 +806,19 @@ class GitService {
                             for (const line of lines) {
                                 if (line.includes('|') && !line.match(/^\d+\s+\d+\s+/)) {
                                     const [hash, author, email, atSeconds, message] = line.split('|');
-                                    const ts = Number(atSeconds) * 1000;
-                                    const iso = new Date(ts).toISOString();
+                                    let ts = Number(atSeconds);
+                                    if (!Number.isFinite(ts)) {
+                                        const parsed = Date.parse(atSeconds);
+                                        ts = Number.isFinite(parsed) ? parsed : NaN;
+                                    } else {
+                                        ts = ts * 1000;
+                                    }
+                                    const dateObj = new Date(ts);
+                                    if (isNaN(dateObj.getTime())) {
+                                        console.warn(`Skipping commit with invalid date in ${repoInfo.path}: ${hash} (${atSeconds})`);
+                                        continue;
+                                    }
+                                    const iso = dateObj.toISOString();
                                     currentCommit = {
                                         repository: repoInfo.displayName || repoInfo.name,
                                         repositoryId: null,
@@ -625,7 +830,7 @@ class GitService {
                                         message,
                                         files: []
                                     };
-                                    const cDate = new Date(ts);
+                                    const cDate = dateObj;
                                     if ((startBound && cDate < startBound) || (endBound && cDate > endBound)) {
                                         currentCommit = null;
                                     } else {
@@ -859,10 +1064,12 @@ class GitService {
                 const content = await fs.readFile(configPath, 'utf8');
                 let inGitlab = false;
                 let fullpath = null;
+                let hasGitlab = false;
                 for (const rawLine of content.split(/\r?\n/)) {
                     const line = rawLine.trim();
                     if (line.startsWith('[') && line.endsWith(']')) {
                         inGitlab = line.replace(/[\[\]]/g, '').trim().toLowerCase() === 'gitlab';
+                        if (inGitlab) hasGitlab = true;
                         continue;
                     }
                     if (inGitlab) {
@@ -873,9 +1080,9 @@ class GitService {
                         }
                     }
                 }
-                return fullpath;
+                return { fullpath, hasGitlab };
             } catch {
-                return null;
+                return { fullpath: null, hasGitlab: false };
             }
         };
 
@@ -884,20 +1091,20 @@ class GitService {
             try {
                 // If this directory itself is a git repo, record and do not descend further
                 if (await hasGitRepo(dir)) {
-                    // Derive metadata from git config (GitLab fullpath)
+                    // Derive metadata from git config (GitLab info)
                     const { configPath } = await resolveGitConfigPath(dir);
-                    const gitlabFullpath = await parseGitlabFullpath(configPath);
-                    const displayName = gitlabFullpath ? gitlabFullpath.split('/').pop() : null;
+                    const gitlabInfo = await parseGitlabFullpath(configPath);
+                    const displayName = gitlabInfo.fullpath ? gitlabInfo.fullpath.split('/').pop() : null;
                     const normalized = path.normalize(dir);
                     const alreadyAdded = existingPaths.has(normalized);
 
                     // If already in DB, update metadata
-                    if (alreadyAdded && (displayName || gitlabFullpath)) {
+                    if (alreadyAdded && (displayName || gitlabInfo.fullpath)) {
                         try {
                             const repoId = pathToId.get(normalized);
                             await this.db.run(
                                 'UPDATE git_repositories SET display_name = COALESCE(?, display_name), scm = COALESCE(?, scm), scm_fullpath = COALESCE(?, scm_fullpath), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                                [displayName, gitlabFullpath ? 'gitlab' : null, gitlabFullpath, repoId]
+                                [displayName, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath, repoId]
                             );
                         } catch (e) {
                             console.warn(`Failed to update metadata for ${dir}: ${e.message}`);
@@ -909,8 +1116,9 @@ class GitService {
                         displayName: displayName || null,
                         path: dir,
                         alreadyAdded,
-                        scm: gitlabFullpath ? 'gitlab' : null,
-                        scm_fullpath: gitlabFullpath || null
+                        scm: gitlabInfo.fullpath ? 'gitlab' : null,
+                        scm_fullpath: gitlabInfo.fullpath || null,
+                        hasGitlabConfig: !!gitlabInfo.hasGitlab
                     });
                     return; // don't scan nested repos inside
                 }

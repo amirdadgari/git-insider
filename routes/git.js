@@ -153,6 +153,7 @@ router.get('/commits', authenticate, async (req, res) => {
             endDate, 
             repositories,
             includeUnnamed,
+            noCache,
             page = 1,
             limit = 50
         } = req.query;
@@ -169,6 +170,7 @@ router.get('/commits', authenticate, async (req, res) => {
 
         // Always search across all repositories found under saved workspaces
         const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
+        const noCacheBool = String(noCache).toLowerCase() === 'true';
         const pgNum = Math.max(1, parseInt(page, 10) || 1);
         const lmNum = Math.max(1, parseInt(limit, 10) || 50);
         const earlyLimit = pgNum * lmNum;
@@ -177,7 +179,7 @@ router.get('/commits', authenticate, async (req, res) => {
             startDate,
             endDate,
             includeUnnamedBool,
-            { limit: earlyLimit }
+            { limit: earlyLimit, noCache: noCacheBool }
         );
 
         // Simple pagination
