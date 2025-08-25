@@ -311,6 +311,15 @@ router.get('/repositories/:id/changes', authenticate, async (req, res) => {
 router.get('/users', authenticate, async (req, res) => {
     try {
         const gitUsers = await gitService.getAllGitUsers();
+        const q = (req.query.q || '').toString().trim().toLowerCase();
+        if (q) {
+            const filtered = gitUsers.filter(u => {
+                const name = (u.name || '').toString().toLowerCase();
+                const email = (u.email || '').toString().toLowerCase();
+                return name.includes(q) || email.includes(q);
+            });
+            return res.json(filtered);
+        }
         res.json(gitUsers);
     } catch (error) {
         res.status(500).json({ error: error.message });

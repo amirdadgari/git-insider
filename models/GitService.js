@@ -921,29 +921,57 @@ class GitService {
     async getAllGitUsers() {
         const users = new Set();
 
-        const entries = Array.from(this.repositories.entries());
-        const tasks = entries.map(([repoId, repo]) => async () => {
-            try {
-                const log = await repo.git.log({
-                    format: {
-                        author: '%an',
-                        email: '%ae'
-                    }
-                });
-
-                for (const commit of log.all) {
-                    users.add(JSON.stringify({
-                        name: commit.author,
-                        email: commit.author_email
-                    }));
-                }
-            } catch (error) {
-                console.error(`Error getting users from ${repo.name}:`, error.message);
+        const collectFromLog = (log) => {
+            for (const commit of log.all) {
+                const name = commit.author || commit.author_name;
+                const email = commit.authorEmail || commit.author_email || commit.email;
+                if (!name && !email) continue;
+                users.add(JSON.stringify({ name, email }));
             }
-        });
+        };
 
-        await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
-        return Array.from(users).map(user => JSON.parse(user));
+        // Prefer DB-registered repositories; fall back to Workspaces if none loaded
+        const repoEntries = Array.from(this.repositories.entries());
+        if (repoEntries.length > 0) {
+            const tasks = repoEntries.map(([repoId, repo]) => async () => {
+                try {
+                    const log = await repo.git.log({
+                        format: { author: '%an', authorEmail: '%ae' }
+                    });
+                    collectFromLog(log);
+                } catch (error) {
+                    console.error(`Error getting users from ${repo.name}:`, error.message);
+                }
+            });
+            await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+        } else {
+            try {
+                const workspaces = await this.getWorkspaces();
+                for (const ws of workspaces) {
+                    try {
+                        const repos = await this._getWorkspaceReposCached(ws.root_path, {});
+                        const tasks = repos.map(repoInfo => async () => {
+                            try {
+                                const git = await this._getGitForPath(repoInfo.path);
+                                const log = await git.log({
+                                    format: { author: '%an', authorEmail: '%ae' }
+                                });
+                                collectFromLog(log);
+                            } catch (innerErr) {
+                                console.error(`Error getting users from ${repoInfo.path}:`, innerErr.message);
+                            }
+                        });
+                        await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+                    } catch (scanErr) {
+                        console.error(`Error scanning workspace ${ws.root_path} for users:`, scanErr.message);
+                    }
+                }
+            } catch (err) {
+                console.error('Error getting users from workspaces:', err.message);
+            }
+        }
+
+        return Array.from(users).map(s => JSON.parse(s));
     }
 
     async getBranches(repositoryId) {

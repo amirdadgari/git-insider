@@ -8,6 +8,7 @@ class GitInsiderApp {
         this.gitUsers = [];
         this.scanFormInitialized = false;
         this.reposFormInitialized = false;
+        this.gitUsersFiltersInitialized = false;
         this.graphqlHelpInitialized = false;
         this.graphqlHelpExpanded = false; // start collapsed
         
@@ -167,7 +168,13 @@ class GitInsiderApp {
 
     async loadGitUsers() {
         try {
-            const response = await this.apiCall('/api/git/users');
+            // Optional search query from UI
+            const qEl = document.getElementById('users-query');
+            const qs = new URLSearchParams();
+            if (qEl && qEl.value && qEl.value.trim()) qs.set('q', qEl.value.trim());
+            const endpoint = `/api/git/users${qs.toString() ? `?${qs.toString()}` : ''}`;
+
+            const response = await this.apiCall(endpoint);
             this.gitUsers = response;
         } catch (error) {
             console.error('Error loading git users:', error);
@@ -673,23 +680,41 @@ class GitInsiderApp {
 
     async loadGitUsersPage() {
         try {
+            // Setup search listener once
+            if (!this.gitUsersFiltersInitialized) {
+                const queryInput = document.getElementById('users-query');
+                if (queryInput) {
+                    queryInput.addEventListener('input', () => {
+                        // Client-side filtering for responsiveness
+                        this.renderGitUsersList();
+                    });
+                }
+                this.gitUsersFiltersInitialized = true;
+            }
+
             await this.loadGitUsers();
-            const container = document.getElementById('git-users-list');
-            
-            container.innerHTML = this.gitUsers.map(user => `
-                <div class="commit-card">
-                    <div class="text-center">
-                        <div class="text-lg font-medium text-gray-900 dark:text-dark-text">${user.name}</div>
-                        <div class="text-sm text-gray-500 dark:text-dark-text-secondary">${user.email}</div>
-                        <button class="btn btn-secondary btn-sm mt-2" onclick="app.viewUserCommits('${user.email}')">
-                            View Commits
-                        </button>
-                    </div>
-                </div>
-            `).join('');
+            this.renderGitUsersList();
         } catch (error) {
             console.error('Error loading git users:', error);
         }
+    }
+
+    renderGitUsersList() {
+        const container = document.getElementById('git-users-list');
+        if (!container) return;
+        const q = (document.getElementById('users-query')?.value || '').trim().toLowerCase();
+        const users = q
+            ? this.gitUsers.filter(u => [u.name, u.email].some(v => v && v.toLowerCase().includes(q)))
+            : this.gitUsers;
+        container.innerHTML = users.map(user => `
+            <div class="commit-card">
+                <div class="text-center">
+                    <div class="text-lg font-medium text-gray-900 dark:text-dark-text">${user.name || '—'}</div>
+                    <div class="text-sm text-gray-500 dark:text-dark-text-secondary">${user.email || '—'}</div>
+                    ${user.email ? `<button class="btn btn-secondary btn-sm mt-2" onclick="app.viewUserCommits('${user.email}')">View Commits</button>` : ''}
+                </div>
+            </div>
+        `).join('');
     }
 
     async loadTokensPage() {
@@ -824,7 +849,10 @@ class GitInsiderApp {
                 ]
             },
             {
-                group: 'Git', method: 'GET', path: '/api/git/users', desc: 'Get all git users across all repositories', params: []
+                group: 'Git', method: 'GET', path: '/api/git/users', desc: 'Get all git users across all repositories',
+                params: [
+                    { name: 'q', in: 'query', required: false, example: 'alice or alice@example.com' }
+                ]
             },
 
             // Admin

@@ -121,7 +121,8 @@ Notes:
   - Response: plain text diff
 
 - GET `/api/git/users`
-  - All distinct git users across repos.
+  - Query: `q?` (case-insensitive substring; filters by username or email)
+  - All distinct git users across repos. When `q` is provided, only users whose name or email contains `q` are returned.
 
 - GET `/api/git/workspaces`
   - List saved WorkSpaces.
