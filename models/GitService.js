@@ -54,7 +54,23 @@ class GitService {
         const now = Date.now();
         const cached = this.workspaceRepoCache.get(key);
         if (cached && cached.expiresAt > now) {
-            return cached.repos;
+            // Enrich cached entries with repositoryId if missing
+            try {
+                const enriched = await Promise.all((cached.repos || []).map(async (r) => {
+                    if (!r || r.repositoryId !== undefined && r.repositoryId !== null) return r;
+                    try {
+                        const row = await this.db.get('SELECT id FROM git_repositories WHERE path = ?', [r.path]);
+                        if (row && row.id) {
+                            return { ...r, repositoryId: row.id, alreadyAdded: true };
+                        }
+                    } catch {}
+                    return r;
+                }));
+                cached.repos = enriched;
+                return enriched;
+            } catch {
+                return cached.repos;
+            }
         }
         const repos = await this.scanForRepositories(rootPath, options);
         this.workspaceRepoCache.set(key, { expiresAt: now + this.workspaceRepoCacheTTL * 1000, repos });
@@ -140,8 +156,7 @@ class GitService {
                                 if (isNaN(d.getTime())) continue;
                                 arr.push({
                                     repository: repoInfo.displayName || repoInfo.name,
-                                    repositoryId: null,
-                                    repositoryPath: repoInfo.path,
+                                    repositoryId: repoInfo.repositoryId ?? null,
                                     hash: c.hash,
                                     author: c.author || c.author_name,
                                     authorEmail: c.authorEmail || c.author_email,
@@ -563,10 +578,10 @@ class GitService {
                         const monthArrays = await Promise.all(keys.map(k => this._getOrRefreshMonthCacheAsync(k, k === currentKey)));
                         const monthCommits = monthArrays.flat();
                         // Filter by author/date and workspace repos selected
-                        const repoPathsSet = new Set(reposToUse.map(r => r.path));
+                        const repoIdsSet = new Set(reposToUse.map(r => r.repositoryId).filter(id => id !== null && id !== undefined));
                         for (const c of monthCommits) {
-                            // Restrict to repos in this workspace iteration
-                            if (!repoPathsSet.has(c.repositoryPath)) continue;
+                            // Restrict to repos in this workspace iteration (by repositoryId)
+                            if (c.repositoryId === null || c.repositoryId === undefined || !repoIdsSet.has(c.repositoryId)) continue;
                             const cDate = new Date(c.date);
                             if (startBound && cDate < startBound) continue;
                             if (endBound && cDate > endBound) continue;
@@ -618,8 +633,7 @@ class GitService {
                                     if (endBound && cDate > endBound) continue;
                                     results.push({
                                         repository: repoInfo.displayName || repoInfo.name,
-                                        repositoryId: null,
-                                        repositoryPath: repoInfo.path,
+                                        repositoryId: repoInfo.repositoryId ?? null,
                                         hash: commit.hash,
                                         author: commit.author || commit.author_name,
                                         authorEmail: commit.authorEmail || commit.author_email,
@@ -654,14 +668,32 @@ class GitService {
     }
 
     async getCommitDetails(repositoryId, commitHash) {
-        const repo = this.repositories.get(repositoryId);
-        if (!repo) throw new Error('Repository not found');
+        const id = parseInt(repositoryId, 10);
+        if (!Number.isFinite(id)) throw new Error('Invalid repository id');
+
+        let repo = this.repositories.get(id);
+        if (!repo) {
+            // Fallback: load from DB by id and init git instance
+            const row = await this.db.get('SELECT * FROM git_repositories WHERE id = ?', [id]);
+            if (!row) throw new Error('Repository not found');
+            try {
+                await fs.access(row.path);
+                const git = simpleGit(row.path);
+                await git.raw(['rev-parse', '--git-dir']);
+                // Attach and cache
+                repo = { ...row, git };
+                this.repositories.set(id, repo);
+            } catch (e) {
+                throw new Error(`Repository not accessible: ${e.message}`);
+            }
+        }
 
         try {
             const show = await repo.git.show([commitHash, '--name-status']);
             const commit = await repo.git.show([commitHash, '--format=fuller']);
             
             return {
+                repositoryId: id,
                 repository: repo.display_name || repo.name,
                 hash: commitHash,
                 details: commit,
@@ -821,8 +853,7 @@ class GitService {
                                     const iso = dateObj.toISOString();
                                     currentCommit = {
                                         repository: repoInfo.displayName || repoInfo.name,
-                                        repositoryId: null,
-                                        repositoryPath: repoInfo.path,
+                                        repositoryId: repoInfo.repositoryId ?? null,
                                         hash,
                                         author,
                                         email,
@@ -1125,6 +1156,7 @@ class GitService {
                     const displayName = gitlabInfo.fullpath ? gitlabInfo.fullpath.split('/').pop() : null;
                     const normalized = path.normalize(dir);
                     const alreadyAdded = existingPaths.has(normalized);
+                    let repositoryId = alreadyAdded ? pathToId.get(normalized) : null;
 
                     // If already in DB, update metadata
                     if (alreadyAdded && (displayName || gitlabInfo.fullpath)) {
@@ -1139,10 +1171,42 @@ class GitService {
                         }
                     }
 
+                    // If not in DB yet, insert it now and capture its ID
+                    if (!alreadyAdded) {
+                        try {
+                            const name = displayName || path.basename(normalized);
+                            const result = await this.db.run(
+                                'INSERT INTO git_repositories (name, path, display_name, scm, scm_fullpath) VALUES (?, ?, ?, ?, ?)',
+                                [name, normalized, displayName, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath || null]
+                            );
+                            repositoryId = result.id;
+                            existingPaths.add(normalized);
+                            pathToId.set(normalized, repositoryId);
+                        } catch (e) {
+                            // If insert failed due to UNIQUE constraint, fetch existing id
+                            const msg = (e && e.message || '').toLowerCase();
+                            if (msg.includes('unique') || msg.includes('constraint')) {
+                                try {
+                                    const row = await this.db.get('SELECT id FROM git_repositories WHERE path = ?', [normalized]);
+                                    if (row && row.id) {
+                                        repositoryId = row.id;
+                                        existingPaths.add(normalized);
+                                        pathToId.set(normalized, repositoryId);
+                                    }
+                                } catch (readErr) {
+                                    console.warn(`Failed to resolve existing repo id for ${dir}: ${readErr.message}`);
+                                }
+                            } else {
+                                console.warn(`Failed to insert repository ${dir}: ${e.message}`);
+                            }
+                        }
+                    }
+
                     results.push({
                         name: displayName || path.basename(dir),
                         displayName: displayName || null,
                         path: dir,
+                        repositoryId: repositoryId || null,
                         alreadyAdded,
                         scm: gitlabInfo.fullpath ? 'gitlab' : null,
                         scm_fullpath: gitlabInfo.fullpath || null,
