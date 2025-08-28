@@ -208,7 +208,7 @@ class GitService {
                                 arr.push({
                                     repository: repoInfo.displayName || repoInfo.name,
                                     repositoryId: repoInfo.repositoryId ?? null,
-                                    // repositoryPath: repoInfo.path,
+                                    repositoryPath: repoInfo.path,
                                     hash: c.hash,
                                     author: c.author || c.author_name,
                                     authorEmail: c.authorEmail || c.author_email,
