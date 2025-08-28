@@ -173,7 +173,7 @@ router.get('/commits', authenticate, async (req, res) => {
         const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
         const noCacheBool = String(noCache).toLowerCase() === 'true';
         const pgNum = Math.max(1, parseInt(page, 10) || 1);
-        const lmNum = Math.max(1, parseInt(limit, 10) || 50);
+        const lmNum = Math.max(1, parseInt(limit, 10) || 100);
         const earlyLimit = pgNum * lmNum;
         let commits = await gitService.getCommitsFromWorkspaces(
             userPattern,

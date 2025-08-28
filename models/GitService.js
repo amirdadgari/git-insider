@@ -140,9 +140,10 @@ class GitService {
             for (const ws of workspaces) {
                 try {
                     const repos = await this._getWorkspaceReposCached(ws.root_path, {});
-                    const reposToUse = this._selectNamedReposOnly(repos);
+                    // const reposToUse = this._selectNamedReposOnly(repos); // change to this if you want to exclude unnamed repos
+                    const reposToUse = repos;
                     if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
-                        console.log(`[cache] Workspace ${ws.name || ws.root_path}: ${reposToUse.length} named repos`);
+                        console.log(`[cache] Workspace ${ws.name || ws.root_path}: ${reposToUse.length} repos`);
                     }
                     if (!reposToUse.length) continue;
 
@@ -641,7 +642,7 @@ class GitService {
                         ? Math.max(10, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
                         : null;
 
-                    if (!noCache && !includeUnnamed) {
+                    if (!noCache) {
                         // Determine covered months
                         const s = startBound ? moment(startBound) : (effectiveStart ? moment(effectiveStart, 'YYYY-MM-DD').startOf('day') : null);
                         const e = endBound ? moment(endBound) : moment();
@@ -735,7 +736,7 @@ class GitService {
                                         hash: commit.hash,
                                         author: commit.author || commit.author_name,
                                         authorEmail: commit.authorEmail || commit.author_email,
-                                        date: cDate.toISOString(),
+                                        date: new Date(ts).toISOString(),
                                         message: commit.message,
                                         branch: branchInfo
                                     });
