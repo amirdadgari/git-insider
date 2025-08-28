@@ -208,6 +208,7 @@ class GitService {
                                 arr.push({
                                     repository: repoInfo.displayName || repoInfo.name,
                                     repositoryId: repoInfo.repositoryId ?? null,
+                                    // repositoryPath: repoInfo.path,
                                     hash: c.hash,
                                     author: c.author || c.author_name,
                                     authorEmail: c.authorEmail || c.author_email,
@@ -636,8 +637,8 @@ class GitService {
                     const reposToUse = includeUnnamed ? repos : repos.filter(r => !(r.hasGitlabConfig && !r.displayName));
                     if (!reposToUse.length) continue;
 
-                    // When using cache (default), fetch per-month cached named commits and filter locally.
-                    // If noCache is true OR includeUnnamed is true, fall back to direct git calls for accuracy.
+                    // When using cache (default), fetch per-month cached commits and filter locally.
+                    // Since cache now includes all repos (named and unnamed), we can use it for both cases.
                     const perRepoMax = options && options.limit
                         ? Math.max(10, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
                         : null;
@@ -654,9 +655,12 @@ class GitService {
                         const monthCommits = monthArrays.flat();
                         // Filter by author/date and workspace repos selected
                         const repoIdsSet = new Set(reposToUse.map(r => r.repositoryId).filter(id => id !== null && id !== undefined));
+                        const repoPathsSet = new Set(reposToUse.map(r => r.path));
                         for (const c of monthCommits) {
-                            // Restrict to repos in this workspace iteration (by repositoryId)
-                            if (c.repositoryId === null || c.repositoryId === undefined || !repoIdsSet.has(c.repositoryId)) continue;
+                            // Restrict to repos in this workspace iteration (by repositoryId or path for unnamed repos)
+                            const hasValidRepoId = c.repositoryId !== null && c.repositoryId !== undefined && repoIdsSet.has(c.repositoryId);
+                            const hasValidPath = c.repositoryPath && repoPathsSet.has(c.repositoryPath);
+                            if (!hasValidRepoId && !hasValidPath) continue;
                             const cDate = new Date(c.date);
                             if (startBound && cDate < startBound) continue;
                             if (endBound && cDate > endBound) continue;
