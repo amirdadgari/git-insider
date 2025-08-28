@@ -195,7 +195,8 @@ class GitService {
                                     try {
                                         const nameRevResult = await git.raw(['name-rev', '--name-only', '--refs=refs/heads/*', c.hash]);
                                         if (nameRevResult && nameRevResult.trim() !== 'undefined') {
-                                            branchInfo = nameRevResult.trim();
+                                            // Clean up relative references (~, ^) from name-rev output
+                                            branchInfo = nameRevResult.trim().replace(/[~^]\d*.*$/, '');
                                         }
                                     } catch (nameRevErr) {
                                         // Ignore name-rev errors
@@ -720,7 +721,8 @@ class GitService {
                                         try {
                                             const nameRevResult = await git.raw(['name-rev', '--name-only', '--refs=refs/heads/*', commit.hash]);
                                             if (nameRevResult && nameRevResult.trim() !== 'undefined') {
-                                                branchInfo = nameRevResult.trim();
+                                                // Clean up relative references (~, ^) from name-rev output
+                                                branchInfo = nameRevResult.trim().replace(/[~^]\d*.*$/, '');
                                             }
                                         } catch (nameRevErr) {
                                             // Ignore name-rev errors
@@ -735,7 +737,7 @@ class GitService {
                                         authorEmail: commit.authorEmail || commit.author_email,
                                         date: cDate.toISOString(),
                                         message: commit.message,
-                                        branch: commit.refs ? this.extractBranchFromRefs(commit.refs) : null
+                                        branch: branchInfo
                                     });
                                 }
                                 return results;
@@ -1414,6 +1416,40 @@ class GitService {
             return String(a.name).localeCompare(String(b.name));
         });
         return results;
+    }
+
+    // Helper method to extract branch name from git refs string
+    extractBranchFromRefs(refs) {
+        if (!refs || typeof refs !== 'string') return null;
+        
+        // refs format: "origin/main, origin/HEAD -> origin/main"
+        // or "HEAD -> main, origin/main"
+        // or just "main"
+        
+        // Look for "HEAD -> branchname" pattern first (current branch)
+        const headMatch = refs.match(/HEAD\s*->\s*([^,\s]+)/);
+        if (headMatch) {
+            const branch = headMatch[1];
+            // Remove origin/ prefix and any relative references (~, ^)
+            return branch.replace(/^origin\//, '').replace(/[~^]\d*.*$/, '');
+        }
+        
+        // Look for branch names (exclude HEAD, tags, etc.)
+        const parts = refs.split(',').map(s => s.trim());
+        for (const part of parts) {
+            // Skip HEAD, tags, and other non-branch refs
+            if (part.includes('HEAD') || part.includes('tag:') || part.includes('refs/tags/')) {
+                continue;
+            }
+            
+            // Extract branch name, removing origin/ prefix and relative references
+            const cleanBranch = part.replace(/^origin\//, '').replace(/[~^]\d*.*$/, '').trim();
+            if (cleanBranch && !cleanBranch.includes('/')) {
+                return cleanBranch;
+            }
+        }
+        
+        return null;
     }
 }
 

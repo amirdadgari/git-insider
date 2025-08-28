@@ -57,7 +57,7 @@ Notes:
 
 ## Types
 - Repository: { id: ID!, name: String!, path: String!, url: String, description: String }
-- Commit: { repository: String!, repositoryId: Int, hash: String!, author: String, authorEmail: String, date: String, message: String, body: String }
+- Commit: { repository: String!, repositoryId: Int, hash: String!, author: String, authorEmail: String, date: String, message: String, body: String, branch: String }
 - FileStat: { filename: String!, additions: Int!, deletions: Int! }
 - CodeChange: { repository: String!, repositoryId: Int, hash: String!, author: String, email: String, date: String, message: String, files: [FileStat!]! }
 - CommitSummary: { hash: String, author: String, date: String, message: String }
@@ -100,6 +100,17 @@ curl -sS http://localhost:3201/api/graphql \
   --data '{
     "query": "query($user:String,$include:Boolean){ commits(user:$user, includeUnnamed:$include){ repository hash author date message } }",
     "variables": {"user":"alice","include":true}
+  }'
+```
+
+Fetch commits from specific branch:
+```bash
+curl -sS http://localhost:3201/api/graphql \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: YOUR_TOKEN_HERE' \
+  --data '{
+    "query": "query($user:String,$branch:String){ commits(user:$user, branch:$branch){ repository hash author date message branch } }",
+    "variables": {"user":"alice","branch":"main"}
   }'
 ```
 

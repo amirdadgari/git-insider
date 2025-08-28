@@ -32,6 +32,7 @@ const typeDefs = /* GraphQL */ `
     date: String
     message: String
     body: String
+    branch: String
   }
 
   type FileStat {
