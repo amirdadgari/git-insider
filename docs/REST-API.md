@@ -91,11 +91,12 @@ Notes:
   - Paginates server-side by slicing results.
 
 - GET `/api/git/commits`
-  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `noCache?=true|false`
+  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `branch?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `noCache?=true|false`
   - Behavior:
     - By default, an in-memory, month-based cache is used for named repositories to speed up results.
     - Set `noCache=true` to bypass the cache and fetch fresh data directly from git.
     - Cache auto-refreshes for the current month approximately every 15 minutes (configurable via `COMMIT_MONTH_CACHE_TTL_SECONDS`).
+    - By default, searches all branches (`--all`). Specify `branch` parameter to search a specific branch (e.g., `branch=main`, `branch=develop`).
   - Always searches across repositories discovered under saved Work Spaces.
   - Response: `{ commits: Commit[], pagination: { page, limit, total, totalPages } }`
 
@@ -109,8 +110,8 @@ Notes:
   - Always searches across saved Work Spaces.
 
 - GET `/api/git/search/commits`
-  - Query: `query` (required), `repositories?=1,2`, `startDate?`, `endDate?`, `page=1`, `limit=50`
-  - Filters commits by message/body substring.
+  - Query: `query` (required), `repositories?=1,2`, `startDate?`, `endDate?`, `branch?`, `page=1`, `limit=50`
+  - Filters commits by message/body substring. By default searches all branches, specify `branch` parameter for specific branch.
 
 - GET `/api/git/diff/:repositoryId/:hash`
   - Query: `filePath` (required)

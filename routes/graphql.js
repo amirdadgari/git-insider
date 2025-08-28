@@ -111,6 +111,7 @@ const typeDefs = /* GraphQL */ `
       startDate: String,
       endDate: String,
       repositories: [Int!],
+      branch: String,
       page: Int,
       limit: Int,
       includeUnnamed: Boolean,
@@ -166,7 +167,7 @@ const resolvers = {
     },
     commits: async (
       _p,
-      { user, users, startDate, endDate, repositories, page, limit, includeUnnamed, noCache },
+      { user, users, startDate, endDate, repositories, branch, page, limit, includeUnnamed, noCache },
       { gitService }
     ) => {
       let userPattern = null;
@@ -182,7 +183,7 @@ const resolvers = {
         startDate,
         endDate,
         !!includeUnnamed,
-        earlyLimit ? { limit: earlyLimit, noCache: !!noCache } : { noCache: !!noCache }
+        earlyLimit ? { limit: earlyLimit, noCache: !!noCache, branch } : { noCache: !!noCache, branch }
       );
 
       if (limit) {

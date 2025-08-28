@@ -21,6 +21,7 @@ Below reflects `routes/graphql.js` schema.
   startDate: String,
   endDate: String,
   repositories: [Int!],
+  branch: String,
   page: Int,
   limit: Int,
   includeUnnamed: Boolean,
@@ -50,6 +51,7 @@ Notes:
 - Commits and CodeChanges always search across saved Work Spaces; `repositories` arg is currently not used for filtering.
 - By default, only repositories with a GitLab project name (`display_name`) are included. Set `includeUnnamed: true` to include repositories without a saved name.
 - A month-based in-memory cache is used for named repositories by default. Set `noCache: true` to bypass the cache and fetch directly from git.
+- By default, commits query searches all branches (`--all`). Specify `branch` parameter to search a specific branch (e.g., `branch: "main"`, `branch: "develop"`).
 - Pagination for list queries is simple in-memory slicing when `limit` is provided; `page` defaults to 1 when used.
 - Dates are ISO-8601 strings (e.g., `2024-01-01`). Ranges are inclusive.
 

@@ -154,6 +154,7 @@ router.get('/commits', authenticate, async (req, res) => {
             repositories,
             includeUnnamed,
             noCache,
+            branch,
             page = 1,
             limit = 50
         } = req.query;
@@ -179,7 +180,7 @@ router.get('/commits', authenticate, async (req, res) => {
             startDate,
             endDate,
             includeUnnamedBool,
-            { limit: earlyLimit, noCache: noCacheBool }
+            { limit: earlyLimit, noCache: noCacheBool, branch }
         );
 
         // Simple pagination
@@ -340,7 +341,7 @@ router.get('/repositories/:id/branches', authenticate, async (req, res) => {
 // Search commits by message
 router.get('/search/commits', authenticate, async (req, res) => {
     try {
-        const { query, repositories, startDate, endDate, page = 1, limit = 50 } = req.query;
+        const { query, repositories, startDate, endDate, branch, page = 1, limit = 50 } = req.query;
 
         if (!query) {
             return res.status(400).json({ error: 'Search query is required' });
@@ -357,7 +358,7 @@ router.get('/search/commits', authenticate, async (req, res) => {
             startDate,
             endDate,
             repositoryIds,
-            options: { limit: earlyLimit }
+            options: { limit: earlyLimit, branch }
         });
 
         // Simple pagination

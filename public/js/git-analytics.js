@@ -17,6 +17,13 @@ class GitAnalytics {
             this.resetCommitsForm();
         });
 
+        // Quick select date buttons for commits
+        document.addEventListener('click', (e) => {
+            if (e.target.hasAttribute('data-date-type') && e.target.hasAttribute('data-period')) {
+                this.handleQuickSelectDate(e.target);
+            }
+        });
+
         // Code changes form
         document.getElementById('changes-filter-form').addEventListener('submit', (e) => {
             e.preventDefault();
@@ -33,6 +40,7 @@ class GitAnalytics {
         const startDate = document.getElementById('commits-start-date').value;
         const endDate = document.getElementById('commits-end-date').value;
         const repository = document.getElementById('commits-repository').value;
+        const branch = document.getElementById('commits-branch').value;
         const includeUnnamed = document.getElementById('commits-include-unnamed')?.checked;
 
         const params = new URLSearchParams({
@@ -46,6 +54,7 @@ class GitAnalytics {
         if (repository) {
             params.append('repositories', repository);
         }
+        if (branch) params.append('branch', branch);
         if (includeUnnamed) params.append('includeUnnamed', 'true');
 
         app.showLoading();
@@ -100,6 +109,7 @@ class GitAnalytics {
                                     <span>${this.formatDate(commit.date)}</span>
                                     <span>•</span>
                                     <span class="badge badge-primary text-xs">${this.escapeHtml(commit.repository)}</span>
+                                    ${commit.branch ? `<span>•</span><span class="badge badge-secondary text-xs">🌿 ${this.escapeHtml(commit.branch)}</span>` : ''}
                                 </div>
                                 ${commit.authorEmail ? `
                                     <div class="text-xs text-gray-400 dark:text-gray-500 mt-1">
@@ -479,6 +489,7 @@ class GitAnalytics {
         document.getElementById('commits-start-date').value = '';
         document.getElementById('commits-end-date').value = '';
         document.getElementById('commits-repository').value = '';
+        document.getElementById('commits-branch').value = '';
         const includeUnnamedEl = document.getElementById('commits-include-unnamed');
         if (includeUnnamedEl) includeUnnamedEl.checked = false;
         
@@ -498,6 +509,46 @@ class GitAnalytics {
         document.getElementById('changes-results').innerHTML = '';
         document.getElementById('changes-count').textContent = '';
         document.getElementById('changes-pagination').innerHTML = '';
+    }
+
+    handleQuickSelectDate(button) {
+        const dateType = button.getAttribute('data-date-type');
+        const period = button.getAttribute('data-period');
+        const today = new Date();
+        let targetDate;
+
+        switch (period) {
+            case 'yesterday':
+                targetDate = new Date(today);
+                targetDate.setDate(today.getDate() - 1);
+                break;
+            case 'last-week':
+                targetDate = new Date(today);
+                targetDate.setDate(today.getDate() - 7);
+                break;
+            case 'last-month':
+                targetDate = new Date(today);
+                targetDate.setMonth(today.getMonth() - 1);
+                break;
+            case 'today':
+                targetDate = new Date(today);
+                break;
+            case 'start-of-month':
+                targetDate = new Date(today.getFullYear(), today.getMonth(), 1);
+                break;
+            default:
+                return;
+        }
+
+        // Format date as YYYY-MM-DD for date input
+        const formattedDate = targetDate.toISOString().split('T')[0];
+        
+        // Set the appropriate input field
+        if (dateType === 'start') {
+            document.getElementById('commits-start-date').value = formattedDate;
+        } else if (dateType === 'end') {
+            document.getElementById('commits-end-date').value = formattedDate;
+        }
     }
 
     formatDate(dateString) {

@@ -90,7 +90,9 @@ class GitService {
         let total = 0;
         for (const v of this.commitMonthCache.values()) total += v.approxBytes || 0;
         const mb = (total / (1024 * 1024)).toFixed(2);
-        console.log(`[cache] Commit month cache: ${this.commitMonthCache.size} month(s), ~${mb} MB`);
+        if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+            console.log(`[cache] Commit month cache: ${this.commitMonthCache.size} month(s), ~${mb} MB`);
+        }
     }
 
     _listMonthsBetween(startMoment, endMoment) {
@@ -115,6 +117,11 @@ class GitService {
     }
 
     async _buildMonthCommits(monthKey) {
+        if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+            console.log(`[cache] Building month cache for ${monthKey}...`);
+        }
+        const startTime = Date.now();
+        
         const excludeMerges = String(process.env.GIT_EXCLUDE_MERGES || 'true').toLowerCase() === 'true';
         const [y, m] = monthKey.split('-').map(n => parseInt(n, 10));
         const monthStart = moment({ year: y, month: m - 1, day: 1 }).startOf('month');
@@ -126,23 +133,45 @@ class GitService {
         const commits = [];
         try {
             const workspaces = await this.getWorkspaces();
+            if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                console.log(`[cache] Found ${workspaces.length} workspaces to scan`);
+            }
+            
             for (const ws of workspaces) {
                 try {
                     const repos = await this._getWorkspaceReposCached(ws.root_path, {});
                     const reposToUse = this._selectNamedReposOnly(repos);
+                    if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                        console.log(`[cache] Workspace ${ws.name || ws.root_path}: ${reposToUse.length} named repos`);
+                    }
                     if (!reposToUse.length) continue;
 
                     const tasks = reposToUse.map(repoInfo => async () => {
                         try {
+                            const repoStartTime = Date.now();
+                            if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                                console.log(`[cache] Processing repo: ${repoInfo.displayName || repoInfo.name}`);
+                            }
+                            
                             const git = await this._getGitForPath(repoInfo.path);
-                            const format = { hash: '%H', author: '%an', authorEmail: '%ae', date: '%at', message: '%s' };
-                            const args = [];
-                            args.push(`--since=${sinceStr}`);
-                            args.push(`--until=${untilStr}`);
-                            if (excludeMerges) args.push('--no-merges');
-                            args.push('--date=unix');
+                            const format = { hash: '%H', author: '%an', authorEmail: '%ae', date: '%at', message: '%s', refs: '%D' };
 
-                            const log = await git.log({ format }, args);
+                            const simpleGitOptions = {
+                                format: format,
+                                '--since': sinceStr,
+                                '--until': untilStr,
+                            }
+
+                            if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                                console.log(`[cache] Git log options for ${repoInfo.displayName || repoInfo.name}:`, simpleGitOptions);
+                            }
+
+                            const log = await git.log(simpleGitOptions);
+                            if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                                console.log(`[cache] Found ${log.all.length} commits in ${repoInfo.displayName || repoInfo.name}`);
+                            }
+                            
+                            let branchDetectionTime = 0;
                             const arr = [];
                             for (const c of log.all) {
                                 let ts = Number(c.date);
@@ -154,6 +183,26 @@ class GitService {
                                 }
                                 const d = new Date(ts);
                                 if (isNaN(d.getTime())) continue;
+                                // Extract branch information from refs
+                                const branchStartTime = Date.now();
+                                let branchInfo = null;
+                                if (c.refs) {
+                                    branchInfo = this.extractBranchFromRefs(c.refs);
+                                }
+                                
+                                // Fallback: use git name-rev if no branch from refs
+                                if (!branchInfo) {
+                                    try {
+                                        const nameRevResult = await git.raw(['name-rev', '--name-only', '--refs=refs/heads/*', c.hash]);
+                                        if (nameRevResult && nameRevResult.trim() !== 'undefined') {
+                                            branchInfo = nameRevResult.trim();
+                                        }
+                                    } catch (nameRevErr) {
+                                        // Ignore name-rev errors
+                                    }
+                                }
+                                branchDetectionTime += (Date.now() - branchStartTime);
+
                                 arr.push({
                                     repository: repoInfo.displayName || repoInfo.name,
                                     repositoryId: repoInfo.repositoryId ?? null,
@@ -161,8 +210,14 @@ class GitService {
                                     author: c.author || c.author_name,
                                     authorEmail: c.authorEmail || c.author_email,
                                     date: d.toISOString(),
-                                    message: c.message
+                                    message: c.message,
+                                    branch: branchInfo
                                 });
+                            }
+                            
+                            const repoTime = Date.now() - repoStartTime;
+                            if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                                console.log(`[cache] Repo ${repoInfo.displayName || repoInfo.name}: ${arr.length} commits processed in ${repoTime}ms (branch detection: ${branchDetectionTime}ms)`);
                             }
                             return arr;
                         } catch (e) {
@@ -179,6 +234,11 @@ class GitService {
             }
         } catch (e) {
             console.error('Error building month commits:', e.message);
+        }
+        
+        const totalTime = Date.now() - startTime;
+        if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+            console.log(`[cache] Month cache for ${monthKey} completed: ${commits.length} commits in ${totalTime}ms`);
         }
         return commits.sort((a, b) => new Date(b.date) - new Date(a.date));
     }
@@ -291,7 +351,9 @@ class GitService {
                         } catch {}
                     }
                     this.repositories.set(repo.id, { ...repo, git });
-                    console.log(`Loaded repository: ${repo.name}`);
+                    if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                        console.log(`Loaded repository: ${repo.name}`);
+                    }
                 } catch (error) {
                     console.warn(`Warning: Repository ${repo.name} at ${repo.path} is not accessible`);
                 }
@@ -437,11 +499,12 @@ class GitService {
                     message: '%s'
                 };
 
-                const customArgs = [];
-                if (userPattern) customArgs.push(`--author=${userPattern}`);
-                if (startDate) customArgs.push(`--since=${startDate}`);
-                if (endDate) customArgs.push(`--until=${endDate}`);
-
+                const simpleGitOptions = {
+                    format: format,
+                    '--author': userPattern,
+                    '--since': startDate,
+                    '--until': endDate,
+                }
                 const log = await repo.git.log({ format }, customArgs);
                 const results = [];
                 for (const commit of log.all) {
@@ -493,7 +556,8 @@ class GitService {
                     author: '%an',
                     authorEmail: '%ae',
                     date: '%at',
-                    message: '%s'
+                    message: '%s',
+                    refs: '%D'
                 };
                 const customArgs = [
                     `--grep=${query}`,
@@ -504,6 +568,13 @@ class GitService {
                 if (endDate) customArgs.push(`--until=${endDate}`);
                 if (excludeMerges) customArgs.push('--no-merges');
                 if (perRepoMax) customArgs.push(`--max-count=${perRepoMax}`);
+                // Handle branch parameter - if no branch specified, search all branches
+                const branch = options && options.branch;
+                if (branch) {
+                    customArgs.push(branch);
+                } else {
+                    customArgs.push('--all');
+                }
 
                 const log = await repo.git.log({ format }, customArgs);
                 const results = [];
@@ -519,7 +590,8 @@ class GitService {
                         author: commit.author || commit.author_name,
                         authorEmail: commit.authorEmail || commit.author_email,
                         date: new Date(ts).toISOString(),
-                        message: commit.message
+                        message: commit.message,
+                        branch: commit.refs ? this.extractBranchFromRefs(commit.refs) : null
                     });
                 }
                 return results;
@@ -543,6 +615,7 @@ class GitService {
         const defaultSinceDays = parseInt(process.env.DEFAULT_SINCE_DAYS || '0', 10);
         const effectiveStart = startDate || (defaultSinceDays > 0 ? moment().subtract(defaultSinceDays, 'days').format('YYYY-MM-DD') : null);
         const noCache = !!(options && options.noCache);
+        const branch = options && options.branch;
 
         // Always keep the current month's cache warm/updated
         try {
@@ -601,19 +674,22 @@ class GitService {
                                     author: '%an',
                                     authorEmail: '%ae',
                                     date: '%at',
-                                    message: '%s'
+                                    message: '%s',
+                                    refs: '%D'
                                 };
 
-                                const customArgs = [];
-                                if (userPattern) customArgs.push(`--author=${userPattern}`);
-                                if (effectiveStart) customArgs.push(`--since=${effectiveStart}`);
-                                if (endDate) customArgs.push(`--until=${endDate}`);
-                                if (excludeMerges) customArgs.push('--no-merges');
-                                if (perRepoMax) customArgs.push(`--max-count=${perRepoMax}`);
-                                // Ensure git formats dates consistently
-                                customArgs.push('--date=unix');
+                                const simpleGitOptions = {
+                                    format: format,
+                                    '--author': userPattern,
+                                    '--since': effectiveStart,
+                                    '--until': endDate,
+                                    '--no-merges': excludeMerges,
+                                    '--max-count': perRepoMax,
+                                    '--all': true,
+                                    '--date': 'unix',
+                                }
 
-                                const log = await git.log({ format }, customArgs);
+                                const log = await git.log(simpleGitOptions);
                                 const results = [];
                                 for (const commit of log.all) {
                                     // Robust timestamp handling: prefer unix seconds, fallback to Date.parse, otherwise skip
@@ -631,6 +707,26 @@ class GitService {
                                     }
                                     if (startBound && cDate < startBound) continue;
                                     if (endBound && cDate > endBound) continue;
+                                    // Extract branch information - try multiple approaches
+                                    let branchInfo = null;
+                                    
+                                    // Method 1: Use refs if available
+                                    if (commit.refs) {
+                                        branchInfo = this.extractBranchFromRefs(commit.refs);
+                                    }
+                                    
+                                    // Method 2: Use git name-rev to find branch for this commit
+                                    if (!branchInfo) {
+                                        try {
+                                            const nameRevResult = await git.raw(['name-rev', '--name-only', '--refs=refs/heads/*', commit.hash]);
+                                            if (nameRevResult && nameRevResult.trim() !== 'undefined') {
+                                                branchInfo = nameRevResult.trim();
+                                            }
+                                        } catch (nameRevErr) {
+                                            // Ignore name-rev errors
+                                        }
+                                    }
+                                    
                                     results.push({
                                         repository: repoInfo.displayName || repoInfo.name,
                                         repositoryId: repoInfo.repositoryId ?? null,
@@ -638,7 +734,8 @@ class GitService {
                                         author: commit.author || commit.author_name,
                                         authorEmail: commit.authorEmail || commit.author_email,
                                         date: cDate.toISOString(),
-                                        message: commit.message
+                                        message: commit.message,
+                                        branch: commit.refs ? this.extractBranchFromRefs(commit.refs) : null
                                     });
                                 }
                                 return results;
@@ -665,6 +762,42 @@ class GitService {
             sorted = sorted.slice(0, Math.max(1, parseInt(options.limit, 10)));
         }
         return sorted;
+    }
+
+    // Helper method to extract branch information from git refs
+    extractBranchFromRefs(refs) {
+        if (!refs) return null;
+        const refList = refs.split(', ');
+        
+        // First try to find origin branches
+        const originBranches = refList.filter(ref => 
+            ref.startsWith('origin/') && !ref.includes('HEAD')
+        ).map(ref => ref.replace('origin/', ''));
+        
+        if (originBranches.length > 0) {
+            return originBranches[0];
+        }
+        
+        // Then try local branches (excluding HEAD and tags)
+        const localBranches = refList.filter(ref => 
+            !ref.includes('/') && !ref.includes('HEAD') && !ref.includes('tag:') && ref.trim() !== ''
+        );
+        
+        if (localBranches.length > 0) {
+            return localBranches[0];
+        }
+        
+        // Last resort: try to extract from any ref that looks like a branch
+        const anyBranch = refList.find(ref => 
+            ref.includes('/') && !ref.includes('HEAD') && !ref.includes('tag:') && !ref.includes('refs/remotes/')
+        );
+        
+        if (anyBranch) {
+            const parts = anyBranch.split('/');
+            return parts[parts.length - 1];
+        }
+        
+        return null;
     }
 
     async getCommitDetails(repositoryId, commitHash) {
