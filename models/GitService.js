@@ -161,6 +161,7 @@ class GitService {
                                 format: format,
                                 '--since': sinceStr,
                                 '--until': untilStr,
+                                '--all': true
                             }
 
                             if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
@@ -520,8 +521,9 @@ class GitService {
                     '--author': userPattern,
                     '--since': startDate,
                     '--until': endDate,
+                    '--all': true
                 }
-                const log = await repo.git.log({ format }, customArgs);
+                const log = await repo.git.log(simpleGitOptions);
                 const results = [];
                 for (const commit of log.all) {
                     const ts = Number(commit.date) * 1000;
@@ -656,7 +658,7 @@ class GitService {
                         ? Math.max(100, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
                         : null;
 
-                    if (!noCache) {
+                    if (!noCache) { // use cache
                         // Determine covered months
                         const s = startBound ? moment(startBound) : (effectiveStart ? moment(effectiveStart, 'YYYY-MM-DD').startOf('day') : null);
                         const e = endBound ? moment(endBound) : moment();
