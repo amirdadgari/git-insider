@@ -167,7 +167,20 @@ class GitService {
                                 console.log(`[cache] Git log options for ${repoInfo.displayName || repoInfo.name}:`, simpleGitOptions);
                             }
 
-                            const log = await git.log(simpleGitOptions);
+                            let log;
+                            try {
+                                log = await git.log(simpleGitOptions);
+                            } catch (logError) {
+                                // Handle repositories with no commits yet
+                                if (logError.message && logError.message.includes('does not have any commits yet')) {
+                                    if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
+                                        console.log(`[cache] Skipping empty repository: ${repoInfo.displayName || repoInfo.name} (no commits yet)`);
+                                    }
+                                    return [];
+                                }
+                                throw logError; // Re-throw other git errors
+                            }
+                            
                             if (String(process.env.DEV_MODE || 'false').toLowerCase() === 'true') {
                                 console.log(`[cache] Found ${log.all.length} commits in ${repoInfo.displayName || repoInfo.name}`);
                             }
@@ -684,26 +697,18 @@ class GitService {
                                     refs: '%D'
                                 };
 
-                                const gitArgs = [];
-                                if (userPattern) gitArgs.push(`--author=${userPattern}`);
-                                if (effectiveStart) gitArgs.push(`--since=${effectiveStart}`);
-                                if (endDate) gitArgs.push(`--until=${endDate}`);
-                                if (excludeMerges) gitArgs.push('--no-merges');
-                                if (perRepoMax) gitArgs.push(`--max-count=${perRepoMax}`);
-                                
-                                // Handle branch parameter - if no branch specified, search all branches
-                                if (branch) {
-                                    gitArgs.push(branch);
-                                } else {
-                                    gitArgs.push('--all');
-                                }
-
                                 const simpleGitOptions = {
                                     format: format,
+                                    '--author': userPattern,
+                                    '--since': effectiveStart,
+                                    '--until': endDate,
+                                    '--no-merges': excludeMerges,
+                                    '--max-count': perRepoMax,
+                                    '--all': true,
                                     '--date': 'unix',
                                 }
 
-                                const log = await git.log(simpleGitOptions, gitArgs);
+                                const log = await git.log(simpleGitOptions);
                                 const results = [];
                                 for (const commit of log.all) {
                                     // Robust timestamp handling: prefer unix seconds, fallback to Date.parse, otherwise skip
