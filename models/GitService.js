@@ -640,7 +640,7 @@ class GitService {
                     // When using cache (default), fetch per-month cached commits and filter locally.
                     // Since cache now includes all repos (named and unnamed), we can use it for both cases.
                     const perRepoMax = options && options.limit
-                        ? Math.max(10, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
+                        ? Math.max(100, Math.ceil(options.limit / Math.max(1, reposToUse.length)) + 5)
                         : null;
 
                     if (!noCache) {
@@ -684,18 +684,26 @@ class GitService {
                                     refs: '%D'
                                 };
 
+                                const gitArgs = [];
+                                if (userPattern) gitArgs.push(`--author=${userPattern}`);
+                                if (effectiveStart) gitArgs.push(`--since=${effectiveStart}`);
+                                if (endDate) gitArgs.push(`--until=${endDate}`);
+                                if (excludeMerges) gitArgs.push('--no-merges');
+                                if (perRepoMax) gitArgs.push(`--max-count=${perRepoMax}`);
+                                
+                                // Handle branch parameter - if no branch specified, search all branches
+                                if (branch) {
+                                    gitArgs.push(branch);
+                                } else {
+                                    gitArgs.push('--all');
+                                }
+
                                 const simpleGitOptions = {
                                     format: format,
-                                    '--author': userPattern,
-                                    '--since': effectiveStart,
-                                    '--until': endDate,
-                                    '--no-merges': excludeMerges,
-                                    '--max-count': perRepoMax,
-                                    '--all': true,
                                     '--date': 'unix',
                                 }
 
-                                const log = await git.log(simpleGitOptions);
+                                const log = await git.log(simpleGitOptions, gitArgs);
                                 const results = [];
                                 for (const commit of log.all) {
                                     // Robust timestamp handling: prefer unix seconds, fallback to Date.parse, otherwise skip
