@@ -26,6 +26,7 @@ const typeDefs = /* GraphQL */ `
   type Commit {
     repository: String!
     repositoryId: Int
+    repositoryPath: String
     hash: String!
     author: String
     authorEmail: String
@@ -34,6 +35,7 @@ const typeDefs = /* GraphQL */ `
     body: String
     branch: String
     files: [FileStat!]
+    changes: String
   }
 
   type FileStat {
@@ -186,16 +188,19 @@ const resolvers = {
         startDate,
         endDate,
         !!includeUnnamed,
-        earlyLimit ? { limit: earlyLimit, noCache: !!noCache, branch, includeChanges: !!includeChanges } : { noCache: !!noCache, branch, includeChanges: !!includeChanges }
+        { limit: earlyLimit, noCache: !!noCache, branch, includeChanges: !!includeChanges }
       );
 
-      if (limit) {
-        const pg = Math.max(1, parseInt(page || 1, 10));
-        const lm = Math.max(1, parseInt(limit, 10));
-        const offset = (pg - 1) * lm;
-        commits = commits.slice(offset, offset + lm);
+      // If no limit provided, return all commits (schema expects a list)
+      if (!lm) {
+        return commits;
       }
-      return commits;
+
+      const total = commits.length;
+      const offset = (pg - 1) * lm;
+      const paginated = commits.slice(offset, offset + lm);
+
+      return paginated;
     },
     codeChanges: async (
       _p,

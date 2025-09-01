@@ -27,7 +27,7 @@ Below reflects `routes/graphql.js` schema.
   includeUnnamed: Boolean,
   includeChanges: Boolean,
   noCache: Boolean
-): [Commit!]!
+): CommitsResult!
 - codeChanges(
   user: String,
   users: [String!],
@@ -59,8 +59,8 @@ Notes:
 
 ## Types
 - Repository: { id: ID!, name: String!, path: String!, url: String, description: String }
-- Commit: { repository: String!, repositoryId: Int, hash: String!, author: String, authorEmail: String, date: String, message: String, body: String, branch: String, files: [FileStat!] }
 - FileStat: { filename: String!, additions: Int!, deletions: Int! }
+- Commit: { repository: String!, repositoryId: Int, repositoryPath: String, hash: String!, author: String, authorEmail: String, date: String, message: String, body: String, branch: String, files: [FileStat!], changes: String }
 - CodeChange: { repository: String!, repositoryId: Int, hash: String!, author: String, email: String, date: String, message: String, files: [FileStat!]! }
 - CommitSummary: { hash: String, author: String, date: String, message: String }
 - RepoStats: { repository: String!, totalCommits: Int!, contributors: Int!, branches: Int!, lastCommit: CommitSummary }
@@ -69,16 +69,18 @@ Notes:
 - GitUser: { name: String, email: String }
 - Workspace: { id: ID!, root_path: String!, name: String, repo_count: Int, last_scanned_at: String, is_active: Int }
 - WorkspaceRepo: { workspaceId: Int, workspaceName: String, name: String, path: String, alreadyAdded: Boolean }
+- Pagination: { page: Int!, limit: Int!, total: Int!, totalPages: Int! }
+- CommitsResult: { commits: [Commit!]!, pagination: Pagination! }
 
 ## Examples
 
-Fetch commits by user with pagination:
+Fetch commits by user with pagination (matches REST shape):
 ```bash
 curl -sS http://localhost:3201/api/graphql \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: YOUR_TOKEN_HERE' \
   --data '{
-    "query": "query($user:String,$page:Int,$limit:Int){ commits(user:$user,page:$page,limit:$limit){ repository hash author date message } }",
+    "query": "query($user:String,$page:Int,$limit:Int){ commits(user:$user,page:$page,limit:$limit){ commits { repository repositoryPath repositoryId hash author date message branch } pagination { page limit total totalPages } } }",
     "variables": {"user":"alice","page":1,"limit":20}
   }'
 ```
@@ -89,7 +91,7 @@ curl -sS http://localhost:3201/api/graphql \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: YOUR_TOKEN_HERE' \
   --data '{
-    "query": "query($user:String,$noCache:Boolean){ commits(user:$user, noCache:$noCache){ repository hash author date message } }",
+    "query": "query($user:String,$noCache:Boolean){ commits(user:$user, noCache:$noCache){ commits { repository hash author date message } pagination { page limit total totalPages } } }",
     "variables": {"user":"alice","noCache":true}
   }'
 ```
@@ -100,7 +102,7 @@ curl -sS http://localhost:3201/api/graphql \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: YOUR_TOKEN_HERE' \
   --data '{
-    "query": "query($user:String,$include:Boolean){ commits(user:$user, includeUnnamed:$include){ repository hash author date message } }",
+    "query": "query($user:String,$include:Boolean){ commits(user:$user, includeUnnamed:$include){ commits { repository hash author date message } pagination { page limit total totalPages } } }",
     "variables": {"user":"alice","include":true}
   }'
 ```
@@ -111,7 +113,7 @@ curl -sS http://localhost:3201/api/graphql \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: YOUR_TOKEN_HERE' \
   --data '{
-    "query": "query($user:String,$branch:String){ commits(user:$user, branch:$branch){ repository hash author date message branch } }",
+    "query": "query($user:String,$branch:String){ commits(user:$user, branch:$branch){ commits { repository hash author date message branch } pagination { page limit total totalPages } } }",
     "variables": {"user":"alice","branch":"main"}
   }'
 ```
@@ -122,7 +124,7 @@ curl -sS http://localhost:3201/api/graphql \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: YOUR_TOKEN_HERE' \
   --data '{
-    "query": "query($user:String){ commits(user:$user, includeChanges:true){ repository hash message files { filename additions deletions } } }",
+    "query": "query($user:String){ commits(user:$user, includeChanges:true){ commits { repository hash message files { filename additions deletions } } pagination { page limit total totalPages } } }",
     "variables": {"user":"alice"}
   }'
 ```
