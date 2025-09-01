@@ -91,10 +91,11 @@ Notes:
   - Paginates server-side by slicing results.
 
 - GET `/api/git/commits`
-  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `branch?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `noCache?=true|false`
+  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `branch?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `includeChanges?=true|false`, `noCache?=true|false`
   - Behavior:
     - By default, an in-memory, month-based cache is used for named repositories to speed up results.
     - Set `noCache=true` to bypass the cache and fetch fresh data directly from git.
+    - Set `includeChanges=true` to enrich each commit with per-file additions/deletions. File stats are fetched on demand and are not stored in the month cache.
     - Cache auto-refreshes for the current month approximately every 15 minutes (configurable via `COMMIT_MONTH_CACHE_TTL_SECONDS`).
     - By default, searches all branches (`--all`). Specify `branch` parameter to search a specific branch (e.g., `branch=main`, `branch=develop`).
   - Always searches across repositories discovered under saved Work Spaces.
@@ -144,6 +145,10 @@ Examples:
 ```bash
 # Using API Key
 curl -sS 'http://localhost:3201/api/git/commits?user=alice&page=1&limit=20' \
+  -H 'X-API-Key: YOUR_TOKEN_HERE'
+
+# Include per-file stats for each commit (on demand)
+curl -sS 'http://localhost:3201/api/git/commits?user=alice&includeChanges=true&page=1&limit=10' \
   -H 'X-API-Key: YOUR_TOKEN_HERE'
 
 # Using JWT

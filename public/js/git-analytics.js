@@ -42,6 +42,7 @@ class GitAnalytics {
         const repository = document.getElementById('commits-repository').value;
         const branch = document.getElementById('commits-branch').value;
         const includeUnnamed = document.getElementById('commits-include-unnamed')?.checked;
+        const includeChanges = document.getElementById('commits-include-changes')?.checked;
 
         const params = new URLSearchParams({
             page: page.toString(),
@@ -56,6 +57,7 @@ class GitAnalytics {
         }
         if (branch) params.append('branch', branch);
         if (includeUnnamed) params.append('includeUnnamed', 'true');
+        if (includeChanges) params.append('includeChanges', 'true');
 
         app.showLoading();
 
@@ -492,6 +494,8 @@ class GitAnalytics {
         document.getElementById('commits-branch').value = '';
         const includeUnnamedEl = document.getElementById('commits-include-unnamed');
         if (includeUnnamedEl) includeUnnamedEl.checked = false;
+        const includeChangesEl = document.getElementById('commits-include-changes');
+        if (includeChangesEl) includeChangesEl.checked = false;
         
         // Clear results
         document.getElementById('commits-results').innerHTML = '';

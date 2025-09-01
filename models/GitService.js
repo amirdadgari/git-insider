@@ -634,6 +634,7 @@ class GitService {
         const effectiveStart = startDate || (defaultSinceDays > 0 ? moment().subtract(defaultSinceDays, 'days').format('YYYY-MM-DD') : null);
         const noCache = !!(options && options.noCache);
         const branch = options && options.branch;
+        const includeChanges = !!(options && options.includeChanges);
 
         // Always keep the current month's cache warm/updated
         try {
@@ -683,6 +684,13 @@ class GitService {
                                 const re = new RegExp(userPattern);
                                 if (!re.test(String(c.author)) && !re.test(String(c.authorEmail))) continue;
                             }
+                            if(includeChanges) {
+                                const git = await this._getGitForPath(c.repositoryPath);
+                                c.changes = await git.show([c.hash, '--format=fuller']);
+                            }else {
+                                c.changes = null;
+                            }
+
                             commits.push(c);
                         }
                         // Apply soft perRepoMax only as a global limiter after sorting below
@@ -699,18 +707,18 @@ class GitService {
                                     refs: '%D'
                                 };
 
-                                const simpleGitOptions = {
-                                    format: format,
-                                    '--author': userPattern,
-                                    '--since': effectiveStart,
-                                    '--until': endDate,
-                                    '--no-merges': excludeMerges,
-                                    '--max-count': perRepoMax,
-                                    '--all': true,
-                                    '--date': 'unix',
-                                }
+                                // Build custom args to better support branch filtering and date formats
+                                const customArgs = [];
+                                if (userPattern) customArgs.push(`--author=${userPattern}`);
+                                if (effectiveStart) customArgs.push(`--since=${effectiveStart}`);
+                                if (endDate) customArgs.push(`--until=${endDate}`);
+                                if (excludeMerges) customArgs.push('--no-merges');
+                                if (perRepoMax) customArgs.push(`--max-count=${perRepoMax}`);
+                                customArgs.push('--date=unix');
+                                // Branch selection: specific branch or all branches
+                                if (branch) customArgs.push(branch); else customArgs.push('--all');
 
-                                const log = await git.log(simpleGitOptions);
+                                const log = await git.log({ format }, customArgs);
                                 const results = [];
                                 for (const commit of log.all) {
                                     // Robust timestamp handling: prefer unix seconds, fallback to Date.parse, otherwise skip
@@ -748,10 +756,17 @@ class GitService {
                                             // Ignore name-rev errors
                                         }
                                     }
+
+                                    let changes = null;
+                                    if(includeChanges){
+                                        changes = await git.show([commit.hash, '--format=fuller']);
+                                    }
                                     
                                     results.push({
                                         repository: repoInfo.displayName || repoInfo.name,
                                         repositoryId: repoInfo.repositoryId ?? null,
+                                        // repositoryPath: repoInfo.path,
+                                        changes: changes,
                                         hash: commit.hash,
                                         author: commit.author || commit.author_name,
                                         authorEmail: commit.authorEmail || commit.author_email,
@@ -782,6 +797,14 @@ class GitService {
         let sorted = commits.sort((a, b) => new Date(b.date) - new Date(a.date));
         if (options && options.limit && Number.isFinite(options.limit)) {
             sorted = sorted.slice(0, Math.max(1, parseInt(options.limit, 10)));
+        }
+        // Optionally enrich with per-file stats (additions/deletions) for each commit
+        if (includeChanges && sorted.length) {
+            try {
+                await this._attachFilesToCommits(sorted);
+            } catch (e) {
+                console.error('Failed to attach files to commits:', e.message);
+            }
         }
         return sorted;
     }
@@ -820,6 +843,93 @@ class GitService {
         }
         
         return null;
+    }
+
+    // Helper to attach per-commit file stats to a list of commits in-place.
+    // Commits must include either repositoryPath (preferred for workspaces) or repositoryId.
+    async _attachFilesToCommits(commits) {
+        if (!Array.isArray(commits) || !commits.length) return commits;
+
+        // Group commits by repo path (preferred) or repositoryId
+        const groups = new Map(); // key -> { type: 'path'|'id', path?, id?, hashes: Set<string>, indexByHash: Map }
+        for (let i = 0; i < commits.length; i++) {
+            const c = commits[i];
+            const key = c.repositoryPath ? `path:${path.resolve(c.repositoryPath)}`
+                : (Number.isFinite(c.repositoryId) ? `id:${c.repositoryId}` : null);
+            if (!key) continue;
+            if (!groups.has(key)) {
+                groups.set(key, {
+                    type: key.startsWith('path:') ? 'path' : 'id',
+                    path: key.startsWith('path:') ? key.slice(5) : null,
+                    id: key.startsWith('id:') ? parseInt(key.slice(3), 10) : null,
+                    hashes: new Set(),
+                    indexByHash: new Map(),
+                });
+            }
+            const g = groups.get(key);
+            g.hashes.add(c.hash);
+            g.indexByHash.set(c.hash, i);
+        }
+
+        const tasks = Array.from(groups.values()).map(group => async () => {
+            try {
+                let git = null;
+                if (group.type === 'path') {
+                    git = await this._getGitForPath(group.path);
+                } else if (group.type === 'id') {
+                    const repo = this.repositories.get(group.id) || await (async () => {
+                        const row = await this.db.get('SELECT * FROM git_repositories WHERE id = ?', [group.id]);
+                        if (!row) throw new Error('Repository not found for id ' + group.id);
+                        const g = simpleGit(row.path);
+                        await g.raw(['rev-parse', '--git-dir']);
+                        // Cache for next time
+                        this.repositories.set(group.id, { ...row, git: g });
+                        return { ...row, git: g };
+                    })();
+                    git = repo.git;
+                }
+                if (!git) return;
+
+                const hashes = Array.from(group.hashes);
+                if (!hashes.length) return;
+
+                // Use git log to output only numstat lines grouped by commit marker
+                const args = ['log', '--numstat', '--pretty=format:__COMMIT__%H', ...hashes];
+                const output = await git.raw(args);
+                const filesByHash = new Map();
+                let currentHash = null;
+                for (const line of output.split('\n')) {
+                    if (line.startsWith('__COMMIT__')) {
+                        currentHash = line.replace('__COMMIT__', '').trim();
+                        if (!filesByHash.has(currentHash)) filesByHash.set(currentHash, []);
+                        continue;
+                    }
+                    if (!currentHash) continue;
+                    if (/^\d+\s+\d+\s+/.test(line)) {
+                        const parts = line.split('\t');
+                        if (parts.length >= 3) {
+                            const additions = parseInt(parts[0]) || 0;
+                            const deletions = parseInt(parts[1]) || 0;
+                            const filename = parts.slice(2).join('\t');
+                            filesByHash.get(currentHash).push({ filename, additions, deletions });
+                        }
+                    }
+                }
+
+                // Attach to original commit objects
+                for (const [hash, files] of filesByHash.entries()) {
+                    const idx = group.indexByHash.get(hash);
+                    if (typeof idx === 'number') {
+                        commits[idx].files = files;
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to enrich commits for a repository:', e.message);
+            }
+        });
+
+        await this._mapConcurrent(tasks, t => t(), this.gitConcurrency);
+        return commits;
     }
 
     async getCommitDetails(repositoryId, commitHash) {

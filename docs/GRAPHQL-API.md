@@ -25,6 +25,7 @@ Below reflects `routes/graphql.js` schema.
   page: Int,
   limit: Int,
   includeUnnamed: Boolean,
+  includeChanges: Boolean,
   noCache: Boolean
 ): [Commit!]!
 - codeChanges(
@@ -52,12 +53,13 @@ Notes:
 - By default, only repositories with a GitLab project name (`display_name`) are included. Set `includeUnnamed: true` to include repositories without a saved name.
 - A month-based in-memory cache is used for named repositories by default. Set `noCache: true` to bypass the cache and fetch directly from git.
 - By default, commits query searches all branches (`--all`). Specify `branch` parameter to search a specific branch (e.g., `branch: "main"`, `branch: "develop"`).
+- Set `includeChanges: true` to enrich each commit with per-file additions/deletions. File stats are fetched on demand and are not stored in the month cache.
 - Pagination for list queries is simple in-memory slicing when `limit` is provided; `page` defaults to 1 when used.
 - Dates are ISO-8601 strings (e.g., `2024-01-01`). Ranges are inclusive.
 
 ## Types
 - Repository: { id: ID!, name: String!, path: String!, url: String, description: String }
-- Commit: { repository: String!, repositoryId: Int, hash: String!, author: String, authorEmail: String, date: String, message: String, body: String, branch: String }
+- Commit: { repository: String!, repositoryId: Int, hash: String!, author: String, authorEmail: String, date: String, message: String, body: String, branch: String, files: [FileStat!] }
 - FileStat: { filename: String!, additions: Int!, deletions: Int! }
 - CodeChange: { repository: String!, repositoryId: Int, hash: String!, author: String, email: String, date: String, message: String, files: [FileStat!]! }
 - CommitSummary: { hash: String, author: String, date: String, message: String }
@@ -111,6 +113,17 @@ curl -sS http://localhost:3201/api/graphql \
   --data '{
     "query": "query($user:String,$branch:String){ commits(user:$user, branch:$branch){ repository hash author date message branch } }",
     "variables": {"user":"alice","branch":"main"}
+  }'
+```
+
+Fetch commits including per-file stats (on demand):
+```bash
+curl -sS http://localhost:3201/api/graphql \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: YOUR_TOKEN_HERE' \
+  --data '{
+    "query": "query($user:String){ commits(user:$user, includeChanges:true){ repository hash message files { filename additions deletions } } }",
+    "variables": {"user":"alice"}
   }'
 ```
 

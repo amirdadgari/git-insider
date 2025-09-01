@@ -33,6 +33,7 @@ const typeDefs = /* GraphQL */ `
     message: String
     body: String
     branch: String
+    files: [FileStat!]
   }
 
   type FileStat {
@@ -116,6 +117,7 @@ const typeDefs = /* GraphQL */ `
       page: Int,
       limit: Int,
       includeUnnamed: Boolean,
+      includeChanges: Boolean,
       noCache: Boolean
     ): [Commit!]!
 
@@ -168,7 +170,7 @@ const resolvers = {
     },
     commits: async (
       _p,
-      { user, users, startDate, endDate, repositories, branch, page, limit, includeUnnamed, noCache },
+      { user, users, startDate, endDate, repositories, branch, page, limit, includeUnnamed, includeChanges, noCache },
       { gitService }
     ) => {
       let userPattern = null;
@@ -184,7 +186,7 @@ const resolvers = {
         startDate,
         endDate,
         !!includeUnnamed,
-        earlyLimit ? { limit: earlyLimit, noCache: !!noCache, branch } : { noCache: !!noCache, branch }
+        earlyLimit ? { limit: earlyLimit, noCache: !!noCache, branch, includeChanges: !!includeChanges } : { noCache: !!noCache, branch, includeChanges: !!includeChanges }
       );
 
       if (limit) {
