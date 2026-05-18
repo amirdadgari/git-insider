@@ -288,8 +288,12 @@ class AnalyticsQueryService {
         await this._ensureIndexed(repos, startDate, endDate);
         const repoIds = repos.map((r) => r.id);
 
-        const start = startDate || moment().subtract(3, 'months').format('YYYY-MM-DD');
-        const end = endDate ? moment(endDate).endOf('day').toISOString() : moment().endOf('day').toISOString();
+        const start = startDate
+            ? moment(startDate).startOf('day').toISOString()
+            : moment().subtract(3, 'months').startOf('day').toISOString();
+        const end = endDate
+            ? moment(endDate).endOf('day').toISOString()
+            : moment().endOf('day').toISOString();
         const repoClause = `c.repository_id IN (${repoIds.map(() => '?').join(',')})`;
 
         let contributorClause = '';
@@ -299,7 +303,7 @@ class AnalyticsQueryService {
             contributorParams.push(...contributorIds);
         }
 
-        const rangeParams = [start, end, ...repoIds, ...contributorParams];
+        const rangeParams = [...repoIds, start, end, ...contributorParams];
         const dateFilter = 'c.committed_at >= ? AND c.committed_at <= ?';
 
         const recentCommits = await this.db.all(`

@@ -31,7 +31,6 @@ const platformPages = {
         document.getElementById('setting-index-window').value = s.index_window_months || '3';
         document.getElementById('setting-retention-days').value = s.retention_idle_days || '7';
         document.getElementById('setting-scan-interval').value = s.workspace_scan_interval_minutes || '30';
-
         if (data.scheduler) {
             document.getElementById('scheduler-status').textContent =
                 `Last workspace scan: ${data.scheduler.last_workspace_scan_at || 'never'}`;
@@ -131,21 +130,149 @@ const platformPages = {
         });
     },
 
+    _currentWeekRange() {
+        const now = new Date();
+        const day = now.getDay();
+        const mondayOffset = day === 0 ? -6 : 1 - day;
+        const monday = new Date(now);
+        monday.setDate(now.getDate() + mondayOffset);
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 6);
+        const fmt = (d) => {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        };
+        return { start: fmt(monday), end: fmt(sunday) };
+    },
+
+    _setAnalyticsDateRange(start, end) {
+        const startEl = document.getElementById('analytics-start-date');
+        const endEl = document.getElementById('analytics-end-date');
+        if (startEl) startEl.value = start;
+        if (endEl) endEl.value = end;
+    },
+
     async loadAnalyticsPage() {
         const form = document.getElementById('analytics-filter-form');
         if (form && !form.dataset.bound) {
             form.dataset.bound = '1';
-            const end = new Date();
-            const start = new Date();
-            start.setMonth(start.getMonth() - 3);
-            document.getElementById('analytics-end-date').value = end.toISOString().slice(0, 10);
-            document.getElementById('analytics-start-date').value = start.toISOString().slice(0, 10);
+            const { start, end } = this._currentWeekRange();
+            this._setAnalyticsDateRange(start, end);
             form.addEventListener('submit', (e) => {
                 e.preventDefault();
                 this.renderAnalytics();
             });
+            ['analytics-start-date', 'analytics-end-date'].forEach((id) => {
+                document.getElementById(id)?.addEventListener('change', () => this.renderAnalytics());
+            });
+            if (window.analyticsCharts) {
+                analyticsCharts.bindThemeRefresh(() => this.renderAnalytics());
+            }
         }
         await this.renderAnalytics();
+    },
+
+    _analyticsStatTiles(data) {
+        const fmt = window.analyticsCharts?.fmtNum || ((n) => String(n ?? 0));
+        const totalCommits = (data.commitsOverTime || []).reduce((s, b) => s + (b.count || 0), 0);
+        return [
+            { label: 'Commits', value: fmt(totalCommits), accent: 'stat-tile-accent-blue', tone: 'text-git-blue' },
+            { label: 'Files changed', value: fmt(data.filesChanged), accent: 'stat-tile-accent-purple', tone: 'text-gray-900 dark:text-dark-text' },
+            { label: 'Lines added', value: '+' + fmt(data.totalAdditions), accent: 'stat-tile-accent-green', tone: 'text-green-600 dark:text-green-400' },
+            { label: 'Lines deleted', value: '−' + fmt(data.totalDeletions), accent: 'stat-tile-accent-red', tone: 'text-red-600 dark:text-red-400' }
+        ].map((t) => `
+            <div class="stat-tile ${t.accent}">
+                <p class="stat-tile-label">${platformPages._escape(t.label)}</p>
+                <p class="stat-tile-value ${t.tone}">${platformPages._escape(t.value)}</p>
+            </div>
+        `).join('');
+    },
+
+    _analyticsEmptyChartCard(title, message) {
+        return `
+            <div class="card analytics-chart-card">
+                <h3 class="card-title mb-2">${title}</h3>
+                <p class="empty-state py-8">${platformPages._escape(message)}</p>
+            </div>
+        `;
+    },
+
+    _formatCommitDate(iso) {
+        if (!iso) return '';
+        try {
+            return new Date(iso).toLocaleString(undefined, {
+                month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+            });
+        } catch (_) {
+            return iso;
+        }
+    },
+
+    _renderRecentCommits(commits) {
+        if (!commits?.length) {
+            return ui.emptyState('No commits in this range. Scan workspaces and index repos first.');
+        }
+        return commits.map((c) => {
+            const msg = (c.message || '').split('\n')[0];
+            const truncated = msg.length > 120 ? `${msg.slice(0, 118)}…` : msg;
+            const author = c.contributorName || c.author || 'Unknown';
+            return `
+                <article class="analytics-commit-row">
+                    <div class="flex items-center gap-2 shrink-0">
+                        <span class="analytics-hash">${platformPages._escape((c.hash || '').slice(0, 7))}</span>
+                        <time class="text-xs text-gray-500 dark:text-dark-text-secondary whitespace-nowrap">${platformPages._escape(this._formatCommitDate(c.date))}</time>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm text-gray-900 dark:text-dark-text leading-snug">${platformPages._escape(truncated)}</p>
+                        <p class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">
+                            ${platformPages._escape(author)} · ${platformPages._escape(c.repository || '')}
+                        </p>
+                    </div>
+                </article>
+            `;
+        }).join('');
+    },
+
+    _buildAnalyticsLayout(data) {
+        const ac = window.analyticsCharts;
+        const commitsChart = (data.commitsOverTime || []).length && ac
+            ? ac.chartCard('Commits over time', 'chart-commits', 'Daily commit volume')
+            : this._analyticsEmptyChartCard('Commits over time', 'No commits in this date range.');
+        const linesChart = (data.linesOverTime || []).length && ac
+            ? ac.chartCard('Lines changed', 'chart-lines', 'Additions and deletions per day')
+            : this._analyticsEmptyChartCard(
+                'Lines changed',
+                'No line stats yet for this range. Use Re-index All Repos in Settings to backfill.'
+            );
+        const contribChart = (data.topContributors || []).length && ac
+            ? ac.chartCard('Top contributors', 'chart-contributors', null, { tall: true })
+            : this._analyticsEmptyChartCard('Top contributors', 'No contributor data in range.');
+        const reposChart = (data.topRepositories || []).length && ac
+            ? ac.chartCard('Top repositories', 'chart-repositories', null, { tall: true })
+            : this._analyticsEmptyChartCard('Top repositories', 'No repository activity in range.');
+
+        return `
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                ${this._analyticsStatTiles(data)}
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                ${commitsChart}
+                ${linesChart}
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                ${contribChart}
+                ${reposChart}
+            </div>
+            <div class="card">
+                <div class="flex items-center justify-between gap-3 mb-4">
+                    <h3 class="card-title">Recent commits</h3>
+                    <span class="badge badge-gray">${(data.recentCommits || []).length} shown</span>
+                </div>
+                <div>${this._renderRecentCommits(data.recentCommits)}</div>
+            </div>
+        `;
     },
 
     async renderAnalytics() {
@@ -158,79 +285,28 @@ const platformPages = {
         if (startDate) params.set('startDate', startDate);
         if (endDate) params.set('endDate', endDate);
 
+        if (window.analyticsCharts) analyticsCharts.destroyAll();
+        container.innerHTML = `
+            <div class="flex items-center justify-center py-16 text-sm text-gray-500 dark:text-dark-text-secondary">
+                <svg class="animate-spin w-5 h-5 mr-2 text-git-blue" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                Loading analytics…
+            </div>
+        `;
+
         try {
             const data = await app.apiCall(`/api/git/analytics?${params}`);
-            container.innerHTML = `
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">${ui.statTiles([
-                    { label: 'Files changed', value: data.filesChanged, tone: 'text-gray-900 dark:text-dark-text' },
-                    { label: 'Lines added', value: '+' + data.totalAdditions, tone: 'text-green-600 dark:text-green-400' },
-                    { label: 'Lines deleted', value: '-' + data.totalDeletions, tone: 'text-red-600 dark:text-red-400' },
-                    { label: 'Recent commits', value: data.recentCommits.length, tone: 'text-git-blue' }
-                ])}</div></div>
-                ${this._barChart('Commits over time', data.commitsOverTime, 'count')}
-                ${this._linesChart('Lines over time', data.linesOverTime)}
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    ${this._rankList('Top contributors', data.topContributors, 'name', 'commit_count')}
-                    ${this._rankList('Top repositories', data.topRepositories, 'name', 'commit_count')}
-                </div>
-                <div class="card">
-                    <h3 class="card-title mb-3">Recent commits</h3>
-                    <div class="space-y-2">
-                        ${(data.recentCommits || []).map((c) => `
-                            <div class="text-sm border-b border-gray-100 dark:border-gray-700 pb-2">
-                                <span class="font-mono text-xs">${(c.hash || '').slice(0, 7)}</span>
-                                ${platformPages._escape(c.message || '')}
-                                <span class="text-gray-500 dark:text-dark-text-secondary"> — ${platformPages._escape(c.author || '')} · ${platformPages._escape(c.repository || '')}</span>
-                            </div>
-                        `).join('') || ui.emptyState('No commits in range. Scan workspaces and index repos first.')}
-                    </div>
-                </div>
-            `;
+            container.innerHTML = this._buildAnalyticsLayout(data);
+            requestAnimationFrame(() => {
+                if (window.analyticsCharts) {
+                    analyticsCharts.mountAll(data, { startDate, endDate });
+                }
+            });
         } catch (err) {
             container.innerHTML = `<p class="text-red-500 dark:text-red-400 text-sm">${platformPages._escape(err.message)}</p>`;
         }
-    },
-
-    _barChart(title, buckets, valueKey) {
-        if (!buckets || !buckets.length) {
-            return `<div class="card"><h3 class="card-title mb-2">${title}</h3><p class="empty-state py-4">No data</p></div>`;
-        }
-        const max = Math.max(...buckets.map((b) => b[valueKey] || 0), 1);
-        return `<div class="card"><h3 class="card-title mb-3">${title}</h3>
-            <div class="flex items-end gap-1 h-32">
-                ${buckets.map((b) => {
-                    const h = Math.round(((b[valueKey] || 0) / max) * 100);
-                    return `<div class="flex-1 flex flex-col items-center" title="${b.bucket}: ${b[valueKey]}">
-                        <div class="w-full bg-git-blue rounded-t" style="height:${h}%"></div>
-                        <span class="text-[10px] mt-1 truncate w-full text-center">${(b.bucket || '').slice(5)}</span>
-                    </div>`;
-                }).join('')}
-            </div></div>`;
-    },
-
-    _linesChart(title, buckets) {
-        if (!buckets || !buckets.length) {
-            return `<div class="card"><h3 class="card-title mb-2">${title}</h3><p class="empty-state py-4">No data (enable file stats via includeChanges when indexing)</p></div>`;
-        }
-        const max = Math.max(...buckets.map((b) => (b.additions || 0) + (b.deletions || 0)), 1);
-        return `<div class="card"><h3 class="card-title mb-3">${title}</h3>
-            <div class="flex items-end gap-1 h-32">
-                ${buckets.map((b) => {
-                    const total = (b.additions || 0) + (b.deletions || 0);
-                    const h = Math.round((total / max) * 100);
-                    return `<div class="flex-1 flex flex-col items-center" title="+${b.additions}/-${b.deletions}">
-                        <div class="w-full bg-purple-500 rounded-t" style="height:${h}%"></div>
-                        <span class="text-[10px] mt-1">${(b.bucket || '').slice(5)}</span>
-                    </div>`;
-                }).join('')}
-            </div></div>`;
-    },
-
-    _rankList(title, items, labelKey, countKey) {
-        return `<div class="card"><h3 class="font-semibold mb-3 text-gray-900 dark:text-dark-text">${title}</h3>
-            <ol class="space-y-1 text-sm text-gray-700 dark:text-dark-text">
-                ${(items || []).map((i, idx) => `<li>${idx + 1}. ${platformPages._escape(i[labelKey])} <span class="text-gray-500 dark:text-dark-text-secondary">(${i[countKey]})</span></li>`).join('') || '<li class="text-gray-500 dark:text-dark-text-secondary">No data</li>'}
-            </ol></div>`;
     },
 
     async loadContributorsPage() {

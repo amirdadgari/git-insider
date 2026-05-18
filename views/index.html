@@ -518,23 +518,23 @@
 
             <!-- Analytics Page -->
             <div id="analytics-page" class="page hidden">
-                <div class="mb-6">
-                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Analytics</h2>
-                    <p class="text-gray-600 dark:text-dark-text-secondary">Aggregated metrics from indexed commits</p>
-                </div>
-                <div class="card mb-6">
-                    <form id="analytics-filter-form" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                            <label class="form-label">Start Date</label>
-                            <input type="date" id="analytics-start-date" class="input">
-                        </div>
-                        <div>
-                            <label class="form-label">End Date</label>
-                            <input type="date" id="analytics-end-date" class="input">
-                        </div>
-                        <div class="flex items-end">
-                            <button type="submit" class="btn btn-primary">Load Analytics</button>
-                        </div>
+                <div class="mb-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Analytics</h2>
+                        <p class="text-gray-600 dark:text-dark-text-secondary">Aggregated metrics from indexed commits</p>
+                    </div>
+                    <form id="analytics-filter-form" class="flex flex-wrap items-center gap-2 shrink-0">
+                        <label for="analytics-start-date" class="sr-only">Start date</label>
+                        <input type="date" id="analytics-start-date" class="input py-1.5 px-2 text-sm w-[9.5rem]" title="Start date">
+                        <span class="text-gray-400 dark:text-dark-text-secondary text-sm" aria-hidden="true">–</span>
+                        <label for="analytics-end-date" class="sr-only">End date</label>
+                        <input type="date" id="analytics-end-date" class="input py-1.5 px-2 text-sm w-[9.5rem]" title="End date">
+                        <button type="submit" id="analytics-refresh-btn" class="btn btn-secondary p-2 min-w-0" title="Refresh analytics" aria-label="Refresh analytics">
+                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                                <polyline points="21 3 21 9 15 9"/>
+                            </svg>
+                        </button>
                     </form>
                 </div>
                 <div id="analytics-content" class="space-y-6"></div>
@@ -716,6 +716,7 @@
     <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/graphiql@2.4.0/graphiql.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
     <script src="/js/ui.js"></script>
     <script src="/js/app.js"></script>
@@ -723,6 +724,7 @@
     <script src="/js/auth.js"></script>
     <script src="/js/admin.js"></script>
     <script src="/js/git-analytics.js"></script>
+    <script src="/js/analytics-charts.js"></script>
     <script src="/js/platform.js"></script>
     <script src="/js/contributors-ui.js"></script>
     <script src="/js/index-progress.js"></script>

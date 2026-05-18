@@ -233,8 +233,14 @@ class CommitIndexer {
                 let batchSkipped = 0;
                 for (const entry of commits) {
                     const r = await this._upsertCommit(repositoryId, entry);
-                    if (r.inserted) batchNew += 1;
-                    else batchSkipped += 1;
+                    if (r.inserted) {
+                        batchNew += 1;
+                        if (r.id) {
+                            await this.indexCommitFiles(r.id, repoPath, entry.hash);
+                        }
+                    } else {
+                        batchSkipped += 1;
+                    }
                 }
                 totalNew += batchNew;
                 totalSkipped += batchSkipped;
@@ -254,6 +260,8 @@ class CommitIndexer {
                 until = moment(oldestInBatch).subtract(1, 'second');
                 if (!until.isAfter(since)) break;
             }
+
+            await this._backfillCommitFiles(repositoryId, repoPath, sinceIso, untilIso);
 
             return totalNew;
         } catch (err) {
@@ -281,12 +289,33 @@ class CommitIndexer {
             return { inserted: false };
         }
 
-        await this.db.run(
+        const result = await this.db.run(
             `INSERT INTO commits (repository_id, hash, author_name, author_email, contributor_id, committed_at, message, is_merge)
              VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
             [repositoryId, entry.hash, entry.author, entry.authorEmail, contributorId, entry.date, entry.message]
         );
-        return { inserted: true };
+        return { inserted: true, id: result.id };
+    }
+
+    async _backfillCommitFiles(repositoryId, repoPath, sinceIso, untilIso) {
+        const BATCH = 40;
+        for (;;) {
+            const rows = await this.db.all(`
+                SELECT c.id, c.hash
+                FROM commits c
+                WHERE c.repository_id = ?
+                  AND c.committed_at >= ?
+                  AND c.committed_at <= ?
+                  AND NOT EXISTS (SELECT 1 FROM commit_files cf WHERE cf.commit_id = c.id)
+                ORDER BY c.committed_at DESC
+                LIMIT ?
+            `, [repositoryId, sinceIso, untilIso || moment().toISOString(), BATCH]);
+            if (!rows.length) break;
+            for (const row of rows) {
+                await this.indexCommitFiles(row.id, repoPath, row.hash);
+            }
+            if (rows.length < BATCH) break;
+        }
     }
 
     async indexCommitFiles(commitId, repoPath, hash) {

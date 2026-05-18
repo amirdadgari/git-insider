@@ -67,6 +67,42 @@
         @apply text-2xl font-bold mt-1;
     }
 
+    .stat-tile-accent-blue {
+        @apply border-l-4 border-git-blue;
+    }
+
+    .stat-tile-accent-green {
+        @apply border-l-4 border-git-green;
+    }
+
+    .stat-tile-accent-red {
+        @apply border-l-4 border-git-red;
+    }
+
+    .stat-tile-accent-purple {
+        @apply border-l-4 border-git-purple;
+    }
+
+    .analytics-chart-card {
+        @apply overflow-hidden;
+    }
+
+    .analytics-chart-wrap {
+        @apply relative w-full h-56 sm:h-64;
+    }
+
+    .analytics-chart-wrap--tall {
+        @apply h-64 sm:h-72;
+    }
+
+    .analytics-commit-row {
+        @apply flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4 py-3 border-b border-gray-100 dark:border-dark-border last:border-0;
+    }
+
+    .analytics-hash {
+        @apply font-mono text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-git-blue dark:text-blue-300 shrink-0;
+    }
+
     .stat-card {
         @apply bg-gradient-to-r from-git-blue to-git-purple text-white rounded-lg p-6 shadow-lg;
     }
