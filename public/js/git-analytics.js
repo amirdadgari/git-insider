@@ -35,27 +35,48 @@ class GitAnalytics {
         });
     }
 
+    async loadContributorsDropdown() {
+        const select = document.getElementById('commits-contributor');
+        if (!select || select.dataset.loaded) return;
+        try {
+            const contributors = await app.apiCall('/api/git/contributors');
+            contributors.forEach((c) => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.display_name;
+                select.appendChild(opt);
+            });
+            select.dataset.loaded = '1';
+        } catch (_) {}
+    }
+
     async searchCommits(page = 1) {
+        await this.loadContributorsDropdown();
         const user = document.getElementById('commits-user').value;
         const startDate = document.getElementById('commits-start-date').value;
         const endDate = document.getElementById('commits-end-date').value;
         const repository = document.getElementById('commits-repository').value;
         const branch = document.getElementById('commits-branch').value;
+        const hash = document.getElementById('commits-hash')?.value;
+        const message = document.getElementById('commits-message')?.value;
+        const contributorId = document.getElementById('commits-contributor')?.value;
+        const limit = document.getElementById('commits-limit')?.value || '20';
         const includeUnnamed = document.getElementById('commits-include-unnamed')?.checked;
         const includeChanges = document.getElementById('commits-include-changes')?.checked;
 
         const params = new URLSearchParams({
             page: page.toString(),
-            limit: '20'
+            limit
         });
 
         if (user) params.append('user', user);
         if (startDate) params.append('startDate', startDate);
         if (endDate) params.append('endDate', endDate);
-        if (repository) {
-            params.append('repositories', repository);
-        }
+        if (repository) params.append('repositories', repository);
         if (branch) params.append('branch', branch);
+        if (hash) params.append('hash', hash);
+        if (message) params.append('message', message);
+        if (contributorId) params.append('contributorId', contributorId);
         if (includeUnnamed) params.append('includeUnnamed', 'true');
         if (includeChanges) params.append('includeChanges', 'true');
 
@@ -81,24 +102,18 @@ class GitAnalytics {
         countContainer.textContent = `${data.pagination?.total || 0} commits found`;
 
         if (data.commits.length === 0) {
-            container.innerHTML = `
-                <div class="text-center py-8">
-                    <div class="text-gray-500 dark:text-dark-text-secondary">
-                        📝 No commits found matching your criteria
-                    </div>
-                </div>
-            `;
+            container.innerHTML = ui.emptyState('📝 No commits found matching your criteria');
             return;
         }
 
         container.innerHTML = data.commits.map(commit => `
-            <div class="commit-card">
+            <div class="list-row">
                 <div class="flex items-start justify-between">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-start space-x-3">
                             <div class="flex-shrink-0">
                                 <div class="w-10 h-10 bg-git-blue rounded-full flex items-center justify-center text-white text-sm font-medium">
-                                    ${commit.author.charAt(0).toUpperCase()}
+                                    ${(commit.contributorName || commit.author || '?').charAt(0).toUpperCase()}
                                 </div>
                             </div>
                             <div class="flex-1 min-w-0">
@@ -106,7 +121,7 @@ class GitAnalytics {
                                     ${this.escapeHtml(commit.message)}
                                 </div>
                                 <div class="flex items-center space-x-2 text-xs text-gray-500 dark:text-dark-text-secondary mt-1">
-                                    <span>${this.escapeHtml(commit.author)}</span>
+                                    <span>${this.escapeHtml(commit.contributorName || commit.author)}</span>
                                     <span>•</span>
                                     <span>${this.formatDate(commit.date)}</span>
                                     <span>•</span>
@@ -225,13 +240,7 @@ class GitAnalytics {
         countContainer.textContent = `${data.pagination?.total || 0} code changes found`;
 
         if (data.changes.length === 0) {
-            container.innerHTML = `
-                <div class="text-center py-8">
-                    <div class="text-gray-500 dark:text-dark-text-secondary">
-                        🔄 No code changes found matching your criteria
-                    </div>
-                </div>
-            `;
+            container.innerHTML = ui.emptyState('🔄 No code changes found matching your criteria');
             return;
         }
 
@@ -240,7 +249,7 @@ class GitAnalytics {
             const totalDeletions = change.files.reduce((sum, file) => sum + file.deletions, 0);
 
             return `
-                <div class="commit-card">
+                <div class="list-row">
                     <div class="flex items-start justify-between">
                         <div class="flex-1 min-w-0">
                             <div class="flex items-start space-x-3">

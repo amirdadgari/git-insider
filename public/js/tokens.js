@@ -54,7 +54,7 @@ window.tokens = (function () {
     list.innerHTML = tokens
       .map(
         (t) => `
-        <div class="commit-card">
+        <div class="list-row">
           <div class="flex items-center justify-between">
             <div>
               <div class="font-medium text-gray-900 dark:text-dark-text">${escapeHtml(t.name || 'Untitled')}</div>

@@ -15,29 +15,14 @@ Below reflects `routes/graphql.js` schema.
 
 - repositories: [Repository!]!
 - repositoryStats(id: Int!): RepoStats
-- commits(
-  user: String,
-  users: [String!],
-  startDate: String,
-  endDate: String,
-  repositories: [Int!],
-  branch: String,
-  page: Int,
-  limit: Int,
-  includeUnnamed: Boolean,
-  includeChanges: Boolean,
-  noCache: Boolean
-): CommitsResult!
-- codeChanges(
-  user: String,
-  users: [String!],
-  startDate: String,
-  endDate: String,
-  repositories: [Int!],
-  page: Int,
-  limit: Int,
-  includeUnnamed: Boolean
-): [CodeChange!]!
+- commits(..., hash: String, contributorId: Int, message: String): CommitsResult!
+- codeChanges(..., hash: String, contributorId: Int, message: String): CodeChangesResult!
+- analytics(startDate: String, endDate: String, repositories: [Int!], contributorIds: [Int!]): AnalyticsSummary!
+- contributors: [Contributor!]!
+- contributor(id: Int!): Contributor
+- unmappedAliases(limit: Int): [ContributorAlias!]!
+- appSettings: AppSettings!
+- gitlabIntegration: GitLabIntegration
 - commitDetails(repositoryId: Int!, hash: String!): CommitDetails
 - commitDetailsByPath(repoPath: String!, hash: String!): CommitDetails
 - fileDiff(repositoryId: Int!, hash: String!, filePath: String!): String!
@@ -46,21 +31,25 @@ Below reflects `routes/graphql.js` schema.
 - branches(repositoryId: Int!): Branches
 - workspaces: [Workspace!]!
 - workspacesRepositories(workspaces: [Int!], maxDepth: Int, exclude: [String!], followSymlinks: Boolean): [WorkspaceRepo!]!
-- projectChanges(repositoryId: Int!, startDate: String, endDate: String, page: Int, limit: Int): [CodeChange!]!
+- projectChanges(repositoryId: Int!, ...): CodeChangesResult!
+
+## Mutations (admin)
+- updateSettings, saveGitLabIntegration, syncGitLabUsers, linkAlias, mergeContributors
 
 Notes:
-- Commits and CodeChanges always search across saved Work Spaces; `repositories` arg is currently not used for filtering.
-- By default, only repositories with a GitLab project name (`display_name`) are included. Set `includeUnnamed: true` to include repositories without a saved name.
-- A month-based in-memory cache is used for named repositories by default. Set `noCache: true` to bypass the cache and fetch directly from git.
-- By default, commits query searches all branches (`--all`). Specify `branch` parameter to search a specific branch (e.g., `branch: "main"`, `branch: "develop"`).
-- Set `includeChanges: true` to enrich each commit with per-file additions/deletions. File stats are fetched on demand and are not stored in the month cache.
-- Pagination for list queries is simple in-memory slicing when `limit` is provided; `page` defaults to 1 when used.
-- Dates are ISO-8601 strings (e.g., `2024-01-01`). Ranges are inclusive.
+- Commits and code changes are served from the indexed database by default (`repositories` filter is applied).
+- Set `noCache: true` on `commits` to read live git logs instead of the index.
+- Default index window is 3 months (configurable in Settings). Older ranges are indexed on first query.
+- Set `includeUnnamed: true` to include repos without GitLab `display_name`.
+- Pagination uses database counts with accurate `total` / `totalPages`.
+- Dates are ISO-8601 strings. Ranges are inclusive.
 
 ## Types
 - Repository: { id: ID!, name: String!, path: String!, url: String, description: String }
 - FileStat: { filename: String!, additions: Int!, deletions: Int! }
-- Commit: { repository: String!, repositoryId: Int, repositoryPath: String, hash: String!, author: String, authorEmail: String, date: String, message: String, body: String, branch: String, files: [FileStat!], changes: String }
+- Commit: { ..., contributorId: Int, contributorName: String, ... }
+- CodeChangesResult: { changes: [CodeChange!]!, pagination: Pagination! }
+- AnalyticsSummary: { recentCommits, topContributors, topRepositories, commitsOverTime, linesOverTime, filesChanged, totalAdditions, totalDeletions }
 - CodeChange: { repository: String!, repositoryId: Int, hash: String!, author: String, email: String, date: String, message: String, files: [FileStat!]! }
 - CommitSummary: { hash: String, author: String, date: String, message: String }
 - RepoStats: { repository: String!, totalCommits: Int!, contributors: Int!, branches: Int!, lastCommit: CommitSummary }
@@ -124,7 +113,7 @@ curl -sS http://localhost:3201/api/graphql \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: YOUR_TOKEN_HERE' \
   --data '{
-    "query": "query($user:String){ commits(user:$user, includeChanges:true){ commits { repository hash message files { filename additions deletions } } pagination { page limit total totalPages } } }",
+    "query": "query($user:String){ commits(user:$user, includeChanges:true){ commits { repository hash message changes files { filename additions deletions } } pagination { page limit total totalPages } } }",
     "variables": {"user":"alice"}
   }'
 ```

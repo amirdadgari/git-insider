@@ -40,20 +40,11 @@ class AdminManager {
             const stats = await app.apiCall('/api/admin/stats');
             
             const adminStatsContainer = document.getElementById('admin-stats');
-            adminStatsContainer.innerHTML = `
-                <div class="stat-card">
-                    <div class="text-2xl font-bold">${stats.totalUsers}</div>
-                    <div class="text-sm opacity-90">Total Users</div>
-                </div>
-                <div class="stat-card">
-                    <div class="text-2xl font-bold">${stats.adminUsers}</div>
-                    <div class="text-sm opacity-90">Admin Users</div>
-                </div>
-                <div class="stat-card">
-                    <div class="text-2xl font-bold">${stats.totalRepositories}</div>
-                    <div class="text-sm opacity-90">Repositories</div>
-                </div>
-            `;
+            adminStatsContainer.innerHTML = ui.statTiles([
+                { label: 'Total Users', value: stats.totalUsers, tone: 'text-git-blue' },
+                { label: 'Admin Users', value: stats.adminUsers, tone: 'text-git-orange' },
+                { label: 'Repositories', value: stats.totalRepositories, tone: 'text-gray-900 dark:text-dark-text' }
+            ]);
         } catch (error) {
             console.error('Error loading admin stats:', error);
         }
@@ -116,13 +107,13 @@ class AdminManager {
     showAddUserModal() {
         const modal = document.createElement('div');
         modal.id = 'add-user-modal';
-        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        modal.className = 'modal-overlay';
         
         modal.innerHTML = `
-            <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
+            <div class="modal-panel p-8 max-w-md">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">Add New User</h2>
-                    <button onclick="this.closest('#add-user-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                    <button onclick="this.closest('#add-user-modal').remove()" class="modal-close">✕</button>
                 </div>
                 <form id="add-user-form">
                     <div class="mb-4">
@@ -203,13 +194,13 @@ class AdminManager {
 
             const modal = document.createElement('div');
             modal.id = 'edit-user-modal';
-            modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+            modal.className = 'modal-overlay';
             
             modal.innerHTML = `
-                <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
+                <div class="modal-panel p-8 max-w-md">
                     <div class="flex items-center justify-between mb-6">
                         <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">Edit User</h2>
-                        <button onclick="this.closest('#edit-user-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                        <button onclick="this.closest('#edit-user-modal').remove()" class="modal-close">✕</button>
                     </div>
                     <form id="edit-user-form">
                         <div class="mb-4">
@@ -304,13 +295,13 @@ class AdminManager {
     showAddRepositoryModal() {
         const modal = document.createElement('div');
         modal.id = 'add-repo-modal';
-        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        modal.className = 'modal-overlay';
         
         modal.innerHTML = `
-            <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
+            <div class="modal-panel p-8 max-w-md">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">Add Repository</h2>
-                    <button onclick="this.closest('#add-repo-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                    <button onclick="this.closest('#add-repo-modal').remove()" class="modal-close">✕</button>
                 </div>
                 <form id="add-repo-form">
                     <div class="mb-4">

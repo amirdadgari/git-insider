@@ -5,9 +5,25 @@ const GitService = require('../models/GitService');
 const { authenticateToken, authenticateApiToken } = require('../middleware/auth');
 
 const gitService = new GitService();
+const ContributorService = require('../services/ContributorService');
 
-// Initialize git service
 gitService.initialize().catch(console.error);
+
+async function ensureAnalytics() {
+    if (!gitService.analytics) await gitService.initialize();
+    return gitService.analytics;
+}
+
+function parseUserPattern(user, users) {
+    if (user) return user;
+    if (users) return users.split(',').map((u) => u.trim()).join('|');
+    return null;
+}
+
+function parseRepositoryIds(repositories) {
+    if (!repositories) return null;
+    return repositories.split(',').map((id) => parseInt(id.trim(), 10)).filter((n) => !Number.isNaN(n));
+}
 
 // Authentication middleware for both web and API access
 const authenticate = (req, res, next) => {
@@ -26,6 +42,18 @@ router.get('/repositories', authenticate, async (req, res) => {
         res.json(repositories);
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Rename repository display label (custom override)
+router.patch('/repositories/:id/display-name', authenticate, async (req, res) => {
+    try {
+        const repositoryId = parseInt(req.params.id, 10);
+        const { displayName, reset } = req.body || {};
+        const updated = await gitService.updateRepositoryDisplayName(repositoryId, displayName, { reset: !!reset });
+        res.json(updated);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
     }
 });
 
@@ -143,61 +171,44 @@ router.get('/repositories/:id/stats', authenticate, async (req, res) => {
     }
 });
 
-// Get commits by user(s) in date range
+// Get commits by user(s) in date range (indexed DB with optional live fallback)
 router.get('/commits', authenticate, async (req, res) => {
     try {
-        const { 
-            user, 
-            users, 
-            startDate, 
-            endDate, 
+        const {
+            user,
+            users,
+            startDate,
+            endDate,
             repositories,
             includeUnnamed,
             noCache,
             branch,
             includeChanges,
+            hash,
+            contributorId,
+            message,
             page = 1,
             limit = 50
         } = req.query;
 
-        // Handle single user or multiple users
-        let userPattern = null;
-        if (user) {
-            userPattern = user;
-        } else if (users) {
-            // For multiple users, we'll need to make separate calls and combine
-            const userList = users.split(',').map(u => u.trim());
-            userPattern = userList.join('|');
-        }
-
-        // Always search across all repositories found under saved workspaces
-        const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
-        const noCacheBool = String(noCache).toLowerCase() === 'true';
-        const includeChangesBool = String(includeChanges).toLowerCase() === 'true';
-        const pgNum = Math.max(1, parseInt(page, 10) || 1);
-        const lmNum = Math.max(1, parseInt(limit, 10) || 100);
-        const earlyLimit = pgNum * lmNum;
-        let commits = await gitService.getCommitsFromWorkspaces(
-            userPattern,
+        const analytics = await ensureAnalytics();
+        const result = await analytics.queryCommits({
+            userPattern: parseUserPattern(user, users),
+            contributorId: contributorId ? parseInt(contributorId, 10) : null,
+            hash,
+            message,
             startDate,
             endDate,
-            includeUnnamedBool,
-            { limit: earlyLimit, noCache: noCacheBool, branch, includeChanges: includeChangesBool }
-        );
-
-        // Simple pagination
-        const offset = (page - 1) * limit;
-        const paginatedCommits = commits.slice(offset, offset + parseInt(limit));
-
-        res.json({
-            commits: paginatedCommits,
-            pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
-                total: commits.length,
-                totalPages: Math.ceil(commits.length / limit)
-            }
+            repositoryIds: parseRepositoryIds(repositories),
+            branch,
+            includeUnnamed: String(includeUnnamed).toLowerCase() === 'true',
+            includeChanges: String(includeChanges).toLowerCase() === 'true',
+            noCache: String(noCache).toLowerCase() === 'true',
+            page: parseInt(page, 10) || 1,
+            limit: parseInt(limit, 10) || 50
         });
+
+        res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -234,51 +245,162 @@ router.get('/commits/:repositoryId/:hash', authenticate, async (req, res) => {
 // Get code changes by user(s) in date range
 router.get('/code-changes', authenticate, async (req, res) => {
     try {
-        const { 
-            user, 
-            users, 
-            startDate, 
-            endDate, 
+        const {
+            user,
+            users,
+            startDate,
+            endDate,
             repositories,
             includeUnnamed,
+            contributorId,
+            hash,
+            message,
             page = 1,
             limit = 50
         } = req.query;
 
-        let userPattern = null;
-        if (user) {
-            userPattern = user;
-        } else if (users) {
-            const userList = users.split(',').map(u => u.trim());
-            userPattern = userList.join('|');
-        }
-
-        // Always search across all repositories found under saved workspaces
-        const includeUnnamedBool = String(includeUnnamed).toLowerCase() === 'true';
-        const pgNum = Math.max(1, parseInt(page, 10) || 1);
-        const lmNum = Math.max(1, parseInt(limit, 10) || 50);
-        const earlyLimit = pgNum * lmNum;
-        let changes = await gitService.getCodeChangesFromWorkspaces(
-            userPattern,
+        const analytics = await ensureAnalytics();
+        const result = await analytics.queryCodeChanges({
+            userPattern: parseUserPattern(user, users),
+            contributorId: contributorId ? parseInt(contributorId, 10) : null,
+            hash,
+            message,
             startDate,
             endDate,
-            includeUnnamedBool,
-            { limit: earlyLimit }
-        );
-
-        // Simple pagination
-        const offset = (page - 1) * limit;
-        const paginatedChanges = changes.slice(offset, offset + parseInt(limit));
-
-        res.json({
-            changes: paginatedChanges,
-            pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
-                total: changes.length,
-                totalPages: Math.ceil(changes.length / limit)
-            }
+            repositoryIds: parseRepositoryIds(repositories),
+            includeUnnamed: String(includeUnnamed).toLowerCase() === 'true',
+            page: parseInt(page, 10) || 1,
+            limit: parseInt(limit, 10) || 50,
+            includeChanges: true
         });
+
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Analytics summary
+router.get('/analytics', authenticate, async (req, res) => {
+    try {
+        const { startDate, endDate, repositories, contributorIds } = req.query;
+        const analytics = await ensureAnalytics();
+        const repoIds = parseRepositoryIds(repositories);
+        const contribIds = contributorIds
+            ? contributorIds.split(',').map((id) => parseInt(id.trim(), 10)).filter((n) => !Number.isNaN(n))
+            : null;
+        const summary = await analytics.getAnalyticsSummary(startDate, endDate, repoIds, contribIds);
+        res.json(summary);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Contributors
+router.get('/contributors', authenticate, async (req, res) => {
+    try {
+        const svc = new ContributorService(gitService.db);
+        const contributors = await svc.listContributors();
+        res.json(contributors);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get('/contributors/unmapped', authenticate, async (req, res) => {
+    try {
+        const svc = new ContributorService(gitService.db);
+        const aliases = await svc.listUnmappedAliases(parseInt(req.query.limit, 10) || 100);
+        res.json(aliases);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get('/contributors/suggestions', authenticate, async (req, res) => {
+    try {
+        const svc = new ContributorService(gitService.db);
+        const suggestions = await svc.searchAuthorIdentities(
+            req.query.q || '',
+            parseInt(req.query.limit, 10) || 15
+        );
+        res.json(suggestions);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get('/contributors/:id', authenticate, async (req, res) => {
+    try {
+        const svc = new ContributorService(gitService.db);
+        const contributor = await svc.getContributor(parseInt(req.params.id, 10));
+        if (!contributor) {
+            return res.status(404).json({ error: 'Contributor not found' });
+        }
+        res.json(contributor);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/contributors', authenticate, async (req, res) => {
+    try {
+        const svc = new ContributorService(gitService.db);
+        const contributor = await svc.createContributor(req.body);
+        res.status(201).json(contributor);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.put('/contributors/:id', authenticate, async (req, res) => {
+    try {
+        const svc = new ContributorService(gitService.db);
+        const contributor = await svc.updateContributor(parseInt(req.params.id, 10), req.body);
+        res.json(contributor);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.post('/contributors/:id/aliases', authenticate, async (req, res) => {
+    try {
+        const { authorName, authorEmail } = req.body;
+        const svc = new ContributorService(gitService.db);
+        const result = await svc.linkAlias(parseInt(req.params.id, 10), authorName, authorEmail);
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.post('/contributors/merge', authenticate, async (req, res) => {
+    try {
+        const { targetId, sourceIds } = req.body;
+        const svc = new ContributorService(gitService.db);
+        const contributor = await svc.mergeContributors(targetId, sourceIds || []);
+        res.json(contributor);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// Indexing progress (poll while indexing)
+router.get('/index/status', authenticate, async (req, res) => {
+    try {
+        if (!gitService.indexer) await gitService.initialize();
+        res.json(gitService.indexer.getProgress());
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Trigger manual index (background, newest-first)
+router.post('/index', authenticate, async (req, res) => {
+    try {
+        if (!gitService.indexer) await gitService.initialize();
+        const result = await gitService.indexer.indexAllActiveRepos();
+        res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -354,28 +476,18 @@ router.get('/search/commits', authenticate, async (req, res) => {
         const lmNum = Math.max(1, parseInt(limit, 10) || 50);
         const earlyLimit = pgNum * lmNum;
 
-        const results = await gitService.searchCommits({
-            query,
-            userPattern: null,
+        const analytics = await ensureAnalytics();
+        const result = await analytics.queryCommits({
+            message: query,
             startDate,
             endDate,
             repositoryIds,
-            options: { limit: earlyLimit, branch }
+            branch,
+            page: pgNum,
+            limit: lmNum
         });
 
-        // Simple pagination
-        const offset = (pgNum - 1) * lmNum;
-        const paginatedCommits = results.slice(offset, offset + lmNum);
-
-        res.json({
-            commits: paginatedCommits,
-            pagination: {
-                page: pgNum,
-                limit: lmNum,
-                total: results.length,
-                totalPages: Math.ceil(results.length / lmNum)
-            }
-        });
+        res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

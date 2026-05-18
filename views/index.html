@@ -22,6 +22,28 @@
             </div>
 
             <div class="flex items-center space-x-4">
+                <!-- Indexing status (spinner when active; details on hover) -->
+                <div id="index-toolbar-status"
+                     class="hidden relative group flex items-center justify-center w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 cursor-default"
+                     role="status"
+                     aria-live="polite"
+                     aria-label="Indexing progress">
+                    <svg class="absolute w-9 h-9 -rotate-90" viewBox="0 0 36 36" aria-hidden="true">
+                        <circle cx="18" cy="18" r="15" fill="none" class="stroke-gray-200 dark:stroke-gray-700" stroke-width="3"/>
+                        <circle id="index-toolbar-ring" cx="18" cy="18" r="15" fill="none"
+                            class="stroke-git-blue transition-all duration-300"
+                            stroke-width="3" stroke-linecap="round"
+                            stroke-dasharray="94.25" stroke-dashoffset="94.25"/>
+                    </svg>
+                    <span class="loading-spinner w-4 h-4 text-git-blue relative z-10"></span>
+                    <div id="index-toolbar-popover"
+                         class="absolute right-0 top-full mt-2 w-72 p-3 rounded-lg shadow-lg border border-gray-200 dark:border-dark-border bg-white dark:bg-dark-bg-secondary opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-150 z-50 pointer-events-none">
+                        <p id="index-toolbar-tooltip" class="text-xs text-gray-700 dark:text-dark-text leading-relaxed"></p>
+                        <div class="mt-2 h-1 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                            <div id="index-toolbar-fill" class="h-full bg-git-blue transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
                 <!-- Theme Toggle -->
                 <button id="theme-toggle" class="btn btn-secondary">
                     <span id="theme-icon">🌙</span>
@@ -57,6 +79,12 @@
                 <a href="#code-changes" class="nav-link" data-page="code-changes">
                     🔄 Code Changes
                 </a>
+                <a href="#analytics" class="nav-link" data-page="analytics">
+                    📈 Analytics
+                </a>
+                <a href="#contributors" class="nav-link" data-page="contributors">
+                    🧑 Contributors
+                </a>
                 <a href="#repos" class="nav-link" data-page="repos">
                     📦 Repos
                 </a>
@@ -76,6 +104,9 @@
                     🔌 APIs
                 </a>
                 <div class="border-t border-gray-200 dark:border-dark-border mt-4 pt-4">
+                    <a href="#settings" class="nav-link admin-only hidden" data-page="settings">
+                        🔧 Settings
+                    </a>
                     <a href="#admin" class="nav-link admin-only hidden" data-page="admin">
                         ⚙️ Admin
                     </a>
@@ -99,7 +130,7 @@
                 </div>
 
                 <!-- Stats Cards -->
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" id="stats-grid">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8" id="stats-grid">
                     <!-- Stats will be populated dynamically -->
                 </div>
 
@@ -124,55 +155,57 @@
                     <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Filters</h3>
                     <form id="commits-filter-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">User</label>
+                            <label class="form-label">User</label>
                             <input type="text" id="commits-user" class="input" placeholder="Enter username or email">
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Start Date</label>
+                            <label class="form-label">Start Date</label>
                             <input type="date" id="commits-start-date" class="input">
                             <div class="flex flex-wrap gap-1 mt-2">
-                                <button type="button" class="px-3 py-1.5 text-xs bg-white 
-            dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full hover:bg-blue-50 
-            dark:hover:bg-blue-900 hover:text-blue-700 dark:hover:text-blue-300 transition-all
-            duration-200 border border-gray-300 dark:border-gray-600 hover:border-blue-400 
-            dark:hover:border-blue-500 shadow-sm hover:shadow-md;" data-date-type="start" data-period="yesterday">Yesterday</button>
-                                <button type="button" class="px-3 py-1.5 text-xs bg-white 
-            dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full hover:bg-blue-50 
-            dark:hover:bg-blue-900 hover:text-blue-700 dark:hover:text-blue-300 transition-all
-            duration-200 border border-gray-300 dark:border-gray-600 hover:border-blue-400 
-            dark:hover:border-blue-500 shadow-sm hover:shadow-md;" data-date-type="start" data-period="last-week">Last Week</button>
-                                <button type="button" class="px-3 py-1.5 text-xs bg-white 
-                                dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full hover:bg-blue-50 
-                                dark:hover:bg-blue-900 hover:text-blue-700 dark:hover:text-blue-300 transition-all
-                                duration-200 border border-gray-300 dark:border-gray-600 hover:border-blue-400 
-                                dark:hover:border-blue-500 shadow-sm hover:shadow-md;" data-date-type="start" data-period="last-month">Last Month</button>
+                                <button type="button" class="chip" data-date-type="start" data-period="yesterday">Yesterday</button>
+                                <button type="button" class="chip" data-date-type="start" data-period="last-week">Last Week</button>
+                                <button type="button" class="chip" data-date-type="start" data-period="last-month">Last Month</button>
                             </div>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">End Date</label>
+                            <label class="form-label">End Date</label>
                             <input type="date" id="commits-end-date" class="input">
                             <div class="flex flex-wrap gap-1 mt-2">
-                                <button type="button" class="px-3 py-1.5 text-xs bg-white 
-            dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full hover:bg-blue-50 
-            dark:hover:bg-blue-900 hover:text-blue-700 dark:hover:text-blue-300 transition-all
-            duration-200 border border-gray-300 dark:border-gray-600 hover:border-blue-400 
-            dark:hover:border-blue-500 shadow-sm hover:shadow-md;" data-date-type="end" data-period="today">Today</button>
-                                <button type="button" class="px-3 py-1.5 text-xs bg-white 
-            dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full hover:bg-blue-50 
-            dark:hover:bg-blue-900 hover:text-blue-700 dark:hover:text-blue-300 transition-all
-            duration-200 border border-gray-300 dark:border-gray-600 hover:border-blue-400 
-            dark:hover:border-blue-500 shadow-sm hover:shadow-md;" data-date-type="end" data-period="start-of-month">Start of Month</button>
+                                <button type="button" class="chip" data-date-type="end" data-period="today">Today</button>
+                                <button type="button" class="chip" data-date-type="end" data-period="start-of-month">Start of Month</button>
                             </div>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Repository</label>
+                            <label class="form-label">Repository</label>
                             <select id="commits-repository" class="select">
                                 <option value="">All Repositories</option>
                             </select>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Branch</label>
+                            <label class="form-label">Commit Hash</label>
+                            <input type="text" id="commits-hash" class="input" placeholder="Full or prefix">
+                        </div>
+                        <div>
+                            <label class="form-label">Message</label>
+                            <input type="text" id="commits-message" class="input" placeholder="Search commit message">
+                        </div>
+                        <div>
+                            <label class="form-label">Mapped Contributor</label>
+                            <select id="commits-contributor" class="select">
+                                <option value="">Any contributor</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label">Branch</label>
                             <input type="text" id="commits-branch" class="input" placeholder="e.g., main, develop (leave empty for all branches)">
+                        </div>
+                        <div>
+                            <label class="form-label">Per Page</label>
+                            <select id="commits-limit" class="select">
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
                         </div>
                         <div class="flex items-center space-x-2 mt-6">
                             <input type="checkbox" id="commits-include-unnamed" class="checkbox">
@@ -218,19 +251,19 @@
                     <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Filters</h3>
                     <form id="changes-filter-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">User</label>
+                            <label class="form-label">User</label>
                             <input type="text" id="changes-user" class="input" placeholder="Enter username or email">
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Start Date</label>
+                            <label class="form-label">Start Date</label>
                             <input type="date" id="changes-start-date" class="input">
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">End Date</label>
+                            <label class="form-label">End Date</label>
                             <input type="date" id="changes-end-date" class="input">
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Repository</label>
+                            <label class="form-label">Repository</label>
                             <select id="changes-repository" class="select">
                                 <option value="">All Repositories</option>
                             </select>
@@ -259,7 +292,7 @@
             <div id="repos-page" class="page hidden">
                 <div class="mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Repos</h2>
-                    <p class="text-gray-600 dark:text-dark-text-secondary">List repositories found under your saved WorkSpaces. Filter by specific WorkSpaces.</p>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">List repositories found under your saved WorkSpaces. Names use <code class="text-xs">fullpath</code> from each repo&rsquo;s root <code class="text-xs">config</code> file; rescan refreshes them.</p>
                 </div>
 
                 <!-- Filters -->
@@ -267,7 +300,7 @@
                     <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Filters</h3>
                     <form id="repos-filter-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div class="md:col-span-2 lg:col-span-2">
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">WorkSpaces</label>
+                            <label class="form-label">WorkSpaces</label>
                             <select id="repos-workspaces" class="select w-full" multiple size="6">
                                 <!-- Options populated dynamically -->
                             </select>
@@ -296,7 +329,7 @@
             <div id="workspaces-page" class="page hidden">
                 <div class="mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">WorkSpaces</h2>
-                    <p class="text-gray-600 dark:text-dark-text-secondary">Manage root folders and scan them for Git repositories</p>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Manage root folders and scan for Git repositories. Rescan sets each repo name from <code class="text-xs">fullpath</code> in its root <code class="text-xs">config</code> file.</p>
                 </div>
 
                 <!-- Scan Workspace for Repositories -->
@@ -304,11 +337,11 @@
                     <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Scan Workspace for Git Repositories</h3>
                     <form id="scan-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div class="md:col-span-2 lg:col-span-4">
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Folder Path</label>
+                            <label class="form-label">Folder Path</label>
                             <input type="text" id="scan-path" class="input" placeholder="e.g., D:\\Projects or /home/user/code" required>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Max Depth</label>
+                            <label class="form-label">Max Depth</label>
                             <input type="number" id="scan-max-depth" class="input" min="0" value="4">
                         </div>
                         <div class="flex items-center space-x-2 mt-6">
@@ -316,7 +349,7 @@
                             <label for="scan-follow-symlinks" class="text-sm text-gray-700 dark:text-dark-text">Follow Symlinks</label>
                         </div>
                         <div class="md:col-span-2 lg:col-span-2">
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Exclude Folders (comma separated)</label>
+                            <label class="form-label">Exclude Folders (comma separated)</label>
                             <input type="text" id="scan-exclude" class="input" placeholder="node_modules,.git,dist,build">
                         </div>
                         <div class="md:col-span-2 lg:col-span-4">
@@ -350,7 +383,7 @@
                     <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Git Contributors</h3>
                     <!-- Search -->
                     <div class="mb-4">
-                        <label for="users-query" class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Username or Email</label>
+                        <label for="users-query" class="form-label">Username or Email</label>
                         <input type="text" id="users-query" class="input w-full" placeholder="Search username or email..." />
                     </div>
                     <div id="git-users-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -442,11 +475,11 @@
                     <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text mb-4">Create Token</h3>
                     <form id="tokens-create-form" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Token Name</label>
+                            <label class="form-label">Token Name</label>
                             <input type="text" id="token-name" class="input" placeholder="e.g., CI Bot" required>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Expires At (optional)</label>
+                            <label class="form-label">Expires At (optional)</label>
                             <input type="datetime-local" id="token-expires" class="input">
                             <p class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Leave empty for no expiration.</p>
                         </div>
@@ -483,6 +516,107 @@
                 </div>
             </div>
 
+            <!-- Analytics Page -->
+            <div id="analytics-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Analytics</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Aggregated metrics from indexed commits</p>
+                </div>
+                <div class="card mb-6">
+                    <form id="analytics-filter-form" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label class="form-label">Start Date</label>
+                            <input type="date" id="analytics-start-date" class="input">
+                        </div>
+                        <div>
+                            <label class="form-label">End Date</label>
+                            <input type="date" id="analytics-end-date" class="input">
+                        </div>
+                        <div class="flex items-end">
+                            <button type="submit" class="btn btn-primary">Load Analytics</button>
+                        </div>
+                    </form>
+                </div>
+                <div id="analytics-content" class="space-y-6"></div>
+            </div>
+
+            <!-- Contributors Page -->
+            <div id="contributors-page" class="page hidden">
+                <div class="mb-6 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Contributor Mapping</h2>
+                        <p class="text-gray-600 dark:text-dark-text-secondary">Unify commit authors under canonical contributor profiles for accurate analytics</p>
+                    </div>
+                    <button type="button" id="contributors-add-btn" class="btn btn-primary shrink-0">+ New contributor</button>
+                </div>
+                <div id="contributors-stats" class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6"></div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="card">
+                        <div class="flex items-center justify-between gap-3 mb-4">
+                            <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Contributors</h3>
+                            <span id="contributors-count-badge" class="badge badge-gray">0</span>
+                        </div>
+                        <label for="contributors-search" class="sr-only">Search contributors</label>
+                        <input type="search" id="contributors-search" class="input mb-4" placeholder="Search by name or email…" autocomplete="off" />
+                        <div id="contributors-list" class="space-y-2 max-h-[32rem] overflow-y-auto"></div>
+                    </div>
+                    <div class="card">
+                        <div class="flex items-center justify-between gap-3 mb-4">
+                            <h3 class="text-lg font-semibold text-gray-900 dark:text-dark-text">Unmapped identities</h3>
+                            <span id="unmapped-count-badge" class="badge badge-warning">0</span>
+                        </div>
+                        <label for="unmapped-search" class="sr-only">Search unmapped</label>
+                        <input type="search" id="unmapped-search" class="input mb-4" placeholder="Filter by name or email…" autocomplete="off" />
+                        <p id="unmapped-hint" class="text-xs text-gray-500 dark:text-dark-text-secondary mb-3"></p>
+                        <div id="unmapped-aliases-list" class="space-y-2 max-h-[32rem] overflow-y-auto"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Page -->
+            <div id="settings-page" class="page hidden">
+                <div class="mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-2">Settings</h2>
+                    <p class="text-gray-600 dark:text-dark-text-secondary">Indexing, retention, scheduler, and GitLab integration</p>
+                </div>
+                <form id="settings-form" class="card space-y-4 max-w-xl">
+                    <div>
+                        <label class="form-label">Index window (months)</label>
+                        <input type="number" id="setting-index-window" class="input" min="1" max="24">
+                    </div>
+                    <div>
+                        <label class="form-label">Retention idle days</label>
+                        <input type="number" id="setting-retention-days" class="input" min="1">
+                        <p class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Remove indexed data not accessed within this many days</p>
+                    </div>
+                    <div>
+                        <label class="form-label">Workspace scan interval (minutes)</label>
+                        <input type="number" id="setting-scan-interval" class="input" min="5">
+                    </div>
+                    <div class="border-t border-gray-200 dark:border-dark-border pt-4">
+                        <h3 class="card-title mb-2">GitLab (optional)</h3>
+                        <div class="space-y-3">
+                            <input type="url" id="gitlab-base-url" class="input" placeholder="https://gitlab.example.com">
+                            <input type="password" id="gitlab-token" class="input" placeholder="Private token">
+                            <label class="flex items-center space-x-2">
+                                <input type="checkbox" id="gitlab-enabled" class="checkbox">
+                                <span class="text-gray-700 dark:text-dark-text">Enabled</span>
+                            </label>
+                            <div class="flex gap-2">
+                                <button type="button" id="gitlab-test-btn" class="btn btn-secondary">Test</button>
+                                <button type="button" id="gitlab-sync-btn" class="btn btn-secondary">Sync Users</button>
+                            </div>
+                            <p id="gitlab-status" class="text-sm text-gray-500 dark:text-dark-text-secondary"></p>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit" class="btn btn-primary">Save Settings</button>
+                        <button type="button" id="trigger-index-btn" class="btn btn-secondary">Re-index All Repos</button>
+                    </div>
+                    <p id="scheduler-status" class="text-sm text-gray-500 dark:text-dark-text-secondary"></p>
+                </form>
+            </div>
+
             <!-- Admin Page -->
             <div id="admin-page" class="page hidden">
                 <div class="mb-6">
@@ -510,16 +644,16 @@
     </div>
 
     <!-- Login Modal -->
-    <div id="login-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
+    <div id="login-modal" class="modal-overlay hidden">
+        <div class="modal-panel p-8 max-w-md">
             <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text mb-6 text-center">Login to Git Insider</h2>
             <form id="login-form">
                 <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Username</label>
+                    <label class="form-label">Username</label>
                     <input type="text" id="login-username" class="input" required>
                 </div>
                 <div class="mb-6">
-                    <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Password</label>
+                    <label class="form-label">Password</label>
                     <input type="password" id="login-password" class="input" required>
                 </div>
                 <button type="submit" class="btn btn-primary w-full">
@@ -583,10 +717,14 @@
     <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/graphiql@2.4.0/graphiql.min.js"></script>
 
+    <script src="/js/ui.js"></script>
     <script src="/js/app.js"></script>
     <script src="/js/tokens.js"></script>
     <script src="/js/auth.js"></script>
     <script src="/js/admin.js"></script>
     <script src="/js/git-analytics.js"></script>
+    <script src="/js/platform.js"></script>
+    <script src="/js/contributors-ui.js"></script>
+    <script src="/js/index-progress.js"></script>
 </body>
 </html>

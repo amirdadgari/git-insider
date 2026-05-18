@@ -83,13 +83,13 @@ class AuthManager {
         // Create profile modal dynamically
         const modal = document.createElement('div');
         modal.id = 'profile-modal';
-        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        modal.className = 'modal-overlay';
         
         modal.innerHTML = `
             <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">Profile</h2>
-                    <button onclick="this.closest('#profile-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                    <button onclick="this.closest('#profile-modal').remove()" class="modal-close">✕</button>
                 </div>
                 <form id="profile-form">
                     <div class="mb-4">
@@ -124,13 +124,13 @@ class AuthManager {
         
         const modal = document.createElement('div');
         modal.id = 'change-password-modal';
-        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        modal.className = 'modal-overlay';
         
         modal.innerHTML = `
             <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">Change Password</h2>
-                    <button onclick="this.closest('#change-password-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                    <button onclick="this.closest('#change-password-modal').remove()" class="modal-close">✕</button>
                 </div>
                 <form id="change-password-form">
                     <div class="mb-4">
@@ -205,13 +205,13 @@ class AuthManager {
             
             const modal = document.createElement('div');
             modal.id = 'tokens-modal';
-            modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+            modal.className = 'modal-overlay';
             
             modal.innerHTML = `
                 <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
                     <div class="flex items-center justify-between mb-6">
                         <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">API Tokens</h2>
-                        <button onclick="this.closest('#tokens-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                        <button onclick="this.closest('#tokens-modal').remove()" class="modal-close">✕</button>
                     </div>
                     
                     <div class="mb-6">
@@ -222,7 +222,7 @@ class AuthManager {
                         ${tokens.length === 0 ? 
                             '<p class="text-gray-500 dark:text-dark-text-secondary">No API tokens created yet.</p>' :
                             tokens.map(token => `
-                                <div class="commit-card flex items-center justify-between">
+                                <div class="list-row flex items-center justify-between">
                                     <div>
                                         <div class="font-medium text-gray-900 dark:text-dark-text">${token.name}</div>
                                         <div class="text-sm text-gray-500 dark:text-dark-text-secondary">
@@ -256,13 +256,13 @@ class AuthManager {
     showCreateTokenModal() {
         const modal = document.createElement('div');
         modal.id = 'create-token-modal';
-        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        modal.className = 'modal-overlay';
         
         modal.innerHTML = `
             <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">Create API Token</h2>
-                    <button onclick="this.closest('#create-token-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                    <button onclick="this.closest('#create-token-modal').remove()" class="modal-close">✕</button>
                 </div>
                 <form id="create-token-form">
                     <div class="mb-4">
@@ -314,13 +314,13 @@ class AuthManager {
     showNewTokenModal(tokenData) {
         const modal = document.createElement('div');
         modal.id = 'new-token-modal';
-        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+        modal.className = 'modal-overlay';
         
         modal.innerHTML = `
             <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-8 max-w-md w-full mx-4">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-2xl font-bold text-gray-900 dark:text-dark-text">New API Token</h2>
-                    <button onclick="this.closest('#new-token-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+                    <button onclick="this.closest('#new-token-modal').remove()" class="modal-close">✕</button>
                 </div>
                 <div class="mb-4">
                     <p class="text-gray-600 dark:text-dark-text-secondary mb-4">

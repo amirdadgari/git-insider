@@ -2,12 +2,13 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const GitService = require('../models/GitService');
+const SettingsService = require('../services/SettingsService');
+const GitLabClient = require('../services/GitLabClient');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
 const userModel = new User();
 const gitService = new GitService();
 
-// Initialize git service (required for DB access in admin routes)
 gitService.initialize().catch(console.error);
 
 // Get all users
@@ -123,6 +124,90 @@ router.delete('/workspaces/:id', authenticateToken, requireAdmin, async (req, re
         } else {
             res.status(404).json({ error: 'Workspace not found' });
         }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// App settings
+router.get('/settings', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const settings = new SettingsService(gitService.db);
+        const all = await settings.getAll();
+        const scheduler = await gitService.db.get('SELECT * FROM scheduler_status WHERE id = 1');
+        res.json({ settings: all, scheduler: scheduler || {} });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.put('/settings', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const settings = new SettingsService(gitService.db);
+        const updated = await settings.setMany(req.body);
+        const Scheduler = require('../services/Scheduler');
+        res.json({ settings: updated, message: 'Settings saved. Restart or wait for scheduler reschedule on next interval.' });
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+// GitLab integration
+router.get('/gitlab', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const client = new GitLabClient(gitService.db);
+        const integration = await client.getIntegration();
+        if (integration && integration.private_token) {
+            integration.private_token = '********';
+        }
+        res.json(integration || { enabled: false });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.put('/gitlab', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const client = new GitLabClient(gitService.db);
+        const { baseUrl, privateToken, enabled } = req.body;
+        const row = await client.saveIntegration({
+            baseUrl: baseUrl,
+            privateToken: privateToken,
+            enabled: !!enabled
+        });
+        res.json(row);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.post('/gitlab/test', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const client = new GitLabClient(gitService.db);
+        const { baseUrl, privateToken, enabled } = req.body || {};
+        const result = await client.testConnection({ baseUrl, privateToken, enabled });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.post('/gitlab/sync-users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const client = new GitLabClient(gitService.db);
+        const { baseUrl, privateToken, enabled } = req.body || {};
+        const result = await client.syncUsers({ baseUrl, privateToken, enabled });
+        res.json(result);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.get('/gitlab/users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const client = new GitLabClient(gitService.db);
+        const users = await client.listCachedUsers();
+        res.json(users);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

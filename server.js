@@ -1,3 +1,4 @@
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -6,6 +7,9 @@ const path = require('path');
 require('dotenv').config();
 
 const Database = require('./config/database');
+const GitService = require('./models/GitService');
+const Scheduler = require('./services/Scheduler');
+const IndexProgressHub = require('./services/IndexProgressHub');
 const { setupGraphQL } = require('./routes/graphql');
 
 // Import routes
@@ -18,6 +22,7 @@ const PORT = process.env.PORT || 3201;
 
 // Initialize database
 const db = new Database();
+let scheduler = null;
 
 // Security middleware
 app.use(helmet({
@@ -48,15 +53,21 @@ app.use('/api/git', gitRoutes);
 // (Moved catch-all and error handler below, after GraphQL setup)
 
 // Handle graceful shutdown
+const shutdown = async () => {
+    if (scheduler) scheduler.stop();
+    IndexProgressHub.close();
+    await db.close();
+};
+
 process.on('SIGINT', async () => {
     console.log('\nShutting down gracefully...');
-    await db.close();
+    await shutdown();
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
     console.log('\nShutting down gracefully...');
-    await db.close();
+    await shutdown();
     process.exit(0);
 });
 
@@ -67,8 +78,13 @@ const startServer = async () => {
         await db.connect();
         console.log('Database connected successfully');
 
+        const gitService = new GitService();
+        await gitService.initialize();
+        scheduler = new Scheduler(gitService);
+        await scheduler.start();
+
         // Initialize GraphQL endpoint
-        await setupGraphQL(app);
+        await setupGraphQL(app, gitService);
 
         // Serve the main HTML file for all routes (SPA) AFTER GraphQL
         app.get('*', (req, res) => {
@@ -83,7 +99,15 @@ const startServer = async () => {
             });
         });
 
-        app.listen(PORT, () => {
+        const httpServer = http.createServer(app);
+
+        try {
+            IndexProgressHub.attach(httpServer);
+        } catch (wsErr) {
+            console.warn('WebSocket index progress unavailable (install ws package):', wsErr.message);
+        }
+
+        httpServer.listen(PORT, () => {
             console.log(`🚀 Git Insider server running on port ${PORT}`);
             console.log(`🌐 Open http://localhost:${PORT} in your browser`);
             console.log('📊 Ready to analyze your Git repositories!');

@@ -31,7 +31,7 @@ class User {
 
             return await this.findById(result.id);
         } catch (error) {
-            if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.code === '23505') {
                 throw new Error('Username or email already exists');
             }
             throw error;

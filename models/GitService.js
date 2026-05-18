@@ -311,34 +311,107 @@ class GitService {
         return { configPath: path.join(dir, 'config'), type: 'bare' };
     }
 
-    async _parseGitlabFullpath(configPath) {
+    async _parseGitlabConfig(configPath) {
         try {
             const content = await fs.readFile(configPath, 'utf8');
             let inGitlab = false;
+            let name = null;
             let fullpath = null;
+            let hasGitlab = false;
             for (const rawLine of content.split(/\r?\n/)) {
                 const line = rawLine.trim();
                 if (line.startsWith('[') && line.endsWith(']')) {
                     inGitlab = line.replace(/[\[\]]/g, '').trim().toLowerCase() === 'gitlab';
+                    if (inGitlab) hasGitlab = true;
                     continue;
                 }
                 if (inGitlab) {
-                    const m = line.match(/^fullpath\s*=\s*(.+)$/i);
-                    if (m) {
-                        fullpath = m[1].trim();
-                        break;
-                    }
+                    const nameMatch = line.match(/^name\s*=\s*(.+)$/i);
+                    if (nameMatch) name = nameMatch[1].trim();
+                    const fullpathMatch = line.match(/^fullpath\s*=\s*(.+)$/i);
+                    if (fullpathMatch) fullpath = fullpathMatch[1].trim();
                 }
             }
-            return fullpath;
+            return { name, fullpath, hasGitlab };
         } catch {
-            return null;
+            return { name: null, fullpath: null, hasGitlab: false };
         }
+    }
+
+    /** Read [gitlab] from repo-root `config`, then fall back to the git metadata config. */
+    async _readRepositoryGitlabInfo(repoDir) {
+        const rootConfigPath = path.join(repoDir, 'config');
+        try {
+            await fs.access(rootConfigPath);
+            const rootInfo = await this._parseGitlabConfig(rootConfigPath);
+            if (rootInfo.hasGitlab || rootInfo.fullpath || rootInfo.name) {
+                return rootInfo;
+            }
+        } catch {}
+        try {
+            const cfg = await this._resolveGitConfigPath(repoDir);
+            return await this._parseGitlabConfig(cfg.configPath);
+        } catch {
+            return { name: null, fullpath: null, hasGitlab: false };
+        }
+    }
+
+    _gitlabDerivedDisplayName(gitlabInfo, folderName) {
+        if (!gitlabInfo) return folderName || null;
+        if (gitlabInfo.fullpath) return gitlabInfo.fullpath;
+        if (gitlabInfo.name) return gitlabInfo.name;
+        return folderName || null;
+    }
+
+    _resolveRepositoryDisplayName(dbRow, gitlabInfo, folderName) {
+        const isCustom = dbRow && (dbRow.display_name_custom === 1 || dbRow.display_name_custom === true);
+        if (isCustom && dbRow.display_name) return dbRow.display_name;
+        const derived = this._gitlabDerivedDisplayName(gitlabInfo, folderName);
+        if (derived) return derived;
+        return dbRow?.display_name || dbRow?.name || folderName;
+    }
+
+    async updateRepositoryDisplayName(repositoryId, displayName, { reset = false } = {}) {
+        const id = parseInt(repositoryId, 10);
+        if (Number.isNaN(id)) throw new Error('Invalid repository id');
+
+        const row = await this.db.get('SELECT * FROM git_repositories WHERE id = ?', [id]);
+        if (!row) throw new Error('Repository not found');
+
+        if (reset) {
+            const gitlabInfo = await this._readRepositoryGitlabInfo(row.path);
+            const folderName = row.folder_name || path.basename(row.path);
+            const derived = this._gitlabDerivedDisplayName(gitlabInfo, folderName);
+            const label = derived || folderName;
+            await this.db.run(
+                'UPDATE git_repositories SET display_name = ?, display_name_custom = 0, name = ?, scm = ?, scm_fullpath = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [derived, label, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath, id]
+            );
+        } else {
+            const trimmed = (displayName || '').trim();
+            if (!trimmed) throw new Error('Display name is required');
+            await this.db.run(
+                'UPDATE git_repositories SET display_name = ?, display_name_custom = 1, name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [trimmed, trimmed, id]
+            );
+        }
+
+        const updated = await this.db.get('SELECT * FROM git_repositories WHERE id = ?', [id]);
+        if (this.repositories.has(id)) {
+            const cached = this.repositories.get(id);
+            Object.assign(cached, updated);
+        }
+        this.workspaceRepoCache.clear();
+        return updated;
     }
 
     async initialize() {
         await this.db.connect();
         await this.loadRepositories();
+        const AnalyticsQueryService = require('../services/AnalyticsQueryService');
+        const CommitIndexer = require('../services/CommitIndexer');
+        this.analytics = new AnalyticsQueryService(this.db, this);
+        this.indexer = new CommitIndexer(this.db, this);
     }
 
     async loadRepositories() {
@@ -351,19 +424,20 @@ class GitService {
                     const git = simpleGit(repo.path);
                     await git.raw(['rev-parse', '--git-dir']); // Verify it's a git repository (bare or non-bare)
                     // Try to enrich missing metadata from git config
-                    if (!repo.display_name || !repo.scm_fullpath) {
+                    const isCustom = repo.display_name_custom === 1 || repo.display_name_custom === true;
+                    if (!isCustom && (!repo.display_name || !repo.scm_fullpath)) {
                         try {
-                            const configInfo = await this._resolveGitConfigPath(repo.path);
-                            const fullpath = await this._parseGitlabFullpath(configInfo.configPath);
-                            const displayName = fullpath ? fullpath.split('/').pop() : null;
-                            if (displayName || fullpath) {
+                            const gitlabInfo = await this._readRepositoryGitlabInfo(repo.path);
+                            const folderName = repo.folder_name || path.basename(repo.path);
+                            const displayName = this._gitlabDerivedDisplayName(gitlabInfo, folderName);
+                            if (displayName || gitlabInfo.fullpath) {
                                 await this.db.run(
                                     'UPDATE git_repositories SET display_name = COALESCE(?, display_name), scm = COALESCE(?, scm), scm_fullpath = COALESCE(?, scm_fullpath), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                                    [displayName, fullpath ? 'gitlab' : null, fullpath, repo.id]
+                                    [displayName, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath, repo.id]
                                 );
                                 repo.display_name = displayName || repo.display_name;
-                                repo.scm = fullpath ? 'gitlab' : repo.scm;
-                                repo.scm_fullpath = fullpath || repo.scm_fullpath;
+                                repo.scm = gitlabInfo.fullpath ? 'gitlab' : repo.scm;
+                                repo.scm_fullpath = gitlabInfo.fullpath || repo.scm_fullpath;
                             }
                         } catch {}
                     }
@@ -393,9 +467,8 @@ class GitService {
             // Try to derive display name from git config
             let repoDisplay = null;
             try {
-                const cfg = await this._resolveGitConfigPath(repoPath);
-                const fullpath = await this._parseGitlabFullpath(cfg.configPath);
-                if (fullpath) repoDisplay = fullpath.split('/').pop();
+                const gitlabInfo = await this._readRepositoryGitlabInfo(repoPath);
+                repoDisplay = this._gitlabDerivedDisplayName(gitlabInfo, path.basename(repoPath));
             } catch {}
 
             return {
@@ -434,6 +507,9 @@ class GitService {
                 [repoCount, name, existing.id]
             );
             const workspace = await this.db.get('SELECT * FROM workspaces WHERE id = ?', [existing.id]);
+            if (this.indexer) {
+                this.indexer.indexWorkspace(workspace.id).catch((e) => console.warn('Post-scan index:', e.message));
+            }
             return { root: normalizedRoot, count: repoCount, repositories, workspace };
         } else {
             const result = await this.db.run(
@@ -441,6 +517,9 @@ class GitService {
                 [normalizedRoot, name, repoCount]
             );
             const workspace = await this.db.get('SELECT * FROM workspaces WHERE id = ?', [result.id]);
+            if (this.indexer) {
+                this.indexer.indexWorkspace(workspace.id).catch((e) => console.warn('Post-scan index:', e.message));
+            }
             return { root: normalizedRoot, count: repoCount, repositories, workspace };
         }
     }
@@ -457,21 +536,21 @@ class GitService {
             const git = simpleGit(repoPath);
             await git.raw(['rev-parse', '--git-dir']);
 
+            const folderName = path.basename(repoPath);
             // derive metadata from git config
             let displayName = null, scm = null, scm_fullpath = null;
             try {
-                const cfg = await this._resolveGitConfigPath(repoPath);
-                const fullpath = await this._parseGitlabFullpath(cfg.configPath);
-                if (fullpath) {
-                    scm = 'gitlab';
-                    scm_fullpath = fullpath;
-                    displayName = fullpath.split('/').pop();
+                const gitlabInfo = await this._readRepositoryGitlabInfo(repoPath);
+                if (gitlabInfo.fullpath || gitlabInfo.name) {
+                    scm = gitlabInfo.fullpath ? 'gitlab' : null;
+                    scm_fullpath = gitlabInfo.fullpath;
+                    displayName = this._gitlabDerivedDisplayName(gitlabInfo, folderName);
                 }
             } catch {}
 
             const result = await this.db.run(
-                'INSERT INTO git_repositories (name, path, url, description, display_name, scm, scm_fullpath) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [name, repoPath, url, description, displayName, scm, scm_fullpath]
+                'INSERT INTO git_repositories (name, path, folder_name, url, description, display_name, scm, scm_fullpath) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [name, repoPath, folderName, url, description, displayName, scm, scm_fullpath]
             );
 
             const newRepo = {
@@ -1325,9 +1404,12 @@ class GitService {
         const normalizedRoot = path.resolve(rootPath);
 
         // Load existing repository paths once for quick lookup (also map to id for updates)
-        const existing = await this.db.all('SELECT id, path FROM git_repositories');
+        const existing = await this.db.all(
+            'SELECT id, path, name, display_name, display_name_custom, folder_name FROM git_repositories'
+        );
         const existingPaths = new Set(existing.map(r => path.normalize(r.path)));
         const pathToId = new Map(existing.map(r => [path.normalize(r.path), r.id]));
+        const pathToRow = new Map(existing.map(r => [path.normalize(r.path), r]));
 
         const results = [];
 
@@ -1359,78 +1441,35 @@ class GitService {
             return false;
         };
 
-        const resolveGitConfigPath = async (dir) => {
-            // returns { configPath, type }
-            const dotGitPath = path.join(dir, '.git');
-            try {
-                const stat = await fs.lstat(dotGitPath);
-                if (stat.isDirectory()) {
-                    // standard worktree .git/config
-                    return { configPath: path.join(dotGitPath, 'config'), type: 'worktree' };
-                }
-                if (stat.isFile()) {
-                    // .git is a file pointing to actual gitdir
-                    const content = await fs.readFile(dotGitPath, 'utf8');
-                    const match = content.match(/gitdir:\s*(.*)/i);
-                    if (match && match[1]) {
-                        const gitdir = match[1].trim();
-                        const resolvedGitDir = path.isAbsolute(gitdir) ? gitdir : path.resolve(dir, gitdir);
-                        return { configPath: path.join(resolvedGitDir, 'config'), type: 'worktree' };
-                    }
-                }
-            } catch {}
-            // bare repo fallback
-            return { configPath: path.join(dir, 'config'), type: 'bare' };
-        };
-
-        const parseGitlabFullpath = async (configPath) => {
-            try {
-                const content = await fs.readFile(configPath, 'utf8');
-                let inGitlab = false;
-                let fullpath = null;
-                let hasGitlab = false;
-                for (const rawLine of content.split(/\r?\n/)) {
-                    const line = rawLine.trim();
-                    if (line.startsWith('[') && line.endsWith(']')) {
-                        inGitlab = line.replace(/[\[\]]/g, '').trim().toLowerCase() === 'gitlab';
-                        if (inGitlab) hasGitlab = true;
-                        continue;
-                    }
-                    if (inGitlab) {
-                        const m = line.match(/^fullpath\s*=\s*(.+)$/i);
-                        if (m) {
-                            fullpath = m[1].trim();
-                            break;
-                        }
-                    }
-                }
-                return { fullpath, hasGitlab };
-            } catch {
-                return { fullpath: null, hasGitlab: false };
-            }
-        };
-
         const walk = async (dir, depth) => {
             if (depth < 0) return;
             try {
                 // If this directory itself is a git repo, record and do not descend further
                 if (await hasGitRepo(dir)) {
-                    // Derive metadata from git config (GitLab info)
-                    const { configPath } = await resolveGitConfigPath(dir);
-                    const gitlabInfo = await parseGitlabFullpath(configPath);
-                    const displayName = gitlabInfo.fullpath ? gitlabInfo.fullpath.split('/').pop() : null;
+                    // Derive metadata from repo-root config (or git config fallback)
+                    const gitlabInfo = await this._readRepositoryGitlabInfo(dir);
                     const normalized = path.normalize(dir);
+                    const folderName = path.basename(normalized);
+                    const dbRow = pathToRow.get(normalized);
+                    const derivedDisplayName = this._gitlabDerivedDisplayName(gitlabInfo, folderName);
+                    const resolvedDisplayName = derivedDisplayName || folderName;
                     const alreadyAdded = existingPaths.has(normalized);
                     let repositoryId = alreadyAdded ? pathToId.get(normalized) : null;
 
-                    // If already in DB, update metadata
-                    if (alreadyAdded && (displayName || gitlabInfo.fullpath)) {
+                    // On scan/rescan always sync name from config fullpath
+                    if (alreadyAdded && (derivedDisplayName || gitlabInfo.fullpath)) {
                         try {
                             const repoId = pathToId.get(normalized);
+                            const label = derivedDisplayName || folderName;
                             await this.db.run(
-                                'UPDATE git_repositories SET display_name = COALESCE(?, display_name), scm = COALESCE(?, scm), scm_fullpath = COALESCE(?, scm_fullpath), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                                [displayName, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath, repoId]
+                                'UPDATE git_repositories SET display_name = ?, name = ?, display_name_custom = 0, scm = ?, scm_fullpath = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                                [label, label, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath, repoId]
                             );
+                            if (dbRow) {
+                                dbRow.display_name = label;
+                                dbRow.name = label;
+                                dbRow.display_name_custom = 0;
+                            }
                         } catch (e) {
                             console.warn(`Failed to update metadata for ${dir}: ${e.message}`);
                         }
@@ -1439,10 +1478,10 @@ class GitService {
                     // If not in DB yet, insert it now and capture its ID
                     if (!alreadyAdded) {
                         try {
-                            const name = displayName || path.basename(normalized);
+                            const name = derivedDisplayName || folderName;
                             const result = await this.db.run(
-                                'INSERT INTO git_repositories (name, path, display_name, scm, scm_fullpath) VALUES (?, ?, ?, ?, ?)',
-                                [name, normalized, displayName, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath || null]
+                                'INSERT INTO git_repositories (name, path, folder_name, display_name, scm, scm_fullpath) VALUES (?, ?, ?, ?, ?, ?)',
+                                [name, normalized, folderName, derivedDisplayName, gitlabInfo.fullpath ? 'gitlab' : null, gitlabInfo.fullpath || null]
                             );
                             repositoryId = result.id;
                             existingPaths.add(normalized);
@@ -1468,11 +1507,15 @@ class GitService {
                     }
 
                     results.push({
-                        name: displayName || path.basename(dir),
-                        displayName: displayName || null,
+                        name: resolvedDisplayName,
+                        displayName: resolvedDisplayName,
+                        gitlabName: gitlabInfo.name || null,
+                        gitlabFullpath: gitlabInfo.fullpath || null,
+                        folderName,
                         path: dir,
                         repositoryId: repositoryId || null,
                         alreadyAdded,
+                        displayNameCustom: false,
                         scm: gitlabInfo.fullpath ? 'gitlab' : null,
                         scm_fullpath: gitlabInfo.fullpath || null,
                         hasGitlabConfig: !!gitlabInfo.hasGitlab
@@ -1504,6 +1547,8 @@ class GitService {
         };
 
         await walk(normalizedRoot, maxDepth);
+
+        this.workspaceRepoCache.clear();
 
         // Sort for stable output
         results.sort((a, b) => a.name.localeCompare(b.name));

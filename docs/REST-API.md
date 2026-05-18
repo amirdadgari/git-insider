@@ -91,15 +91,25 @@ Notes:
   - Paginates server-side by slicing results.
 
 - GET `/api/git/commits`
-  - Query: `user?` OR `users=alice,bob`, `startDate?`, `endDate?`, `branch?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `includeChanges?=true|false`, `noCache?=true|false`
-  - Behavior:
-    - By default, an in-memory, month-based cache is used for named repositories to speed up results.
-    - Set `noCache=true` to bypass the cache and fetch fresh data directly from git.
-    - Set `includeChanges=true` to enrich each commit with per-file additions/deletions. File stats are fetched on demand and are not stored in the month cache.
-    - Cache auto-refreshes for the current month approximately every 15 minutes (configurable via `COMMIT_MONTH_CACHE_TTL_SECONDS`).
-    - By default, searches all branches (`--all`). Specify `branch` parameter to search a specific branch (e.g., `branch=main`, `branch=develop`).
-  - Always searches across repositories discovered under saved Work Spaces.
+  - Query: `user?`, `users=alice,bob`, `startDate?`, `endDate?`, `repositories?=1,2`, `branch?`, `hash?`, `contributorId?`, `message?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `includeChanges?=true|false`, `noCache?=true|false`
+  - Primary path reads from the indexed commits table (PostgreSQL or SQLite). Older date ranges are indexed on first query. Set `noCache=true` to use live git log instead.
   - Response: `{ commits: Commit[], pagination: { page, limit, total, totalPages } }`
+
+- GET `/api/git/analytics`
+  - Query: `startDate?`, `endDate?`, `repositories?=1,2`, `contributorIds?=1,2`
+  - Returns aggregated metrics: top contributors/repos, commits/lines over time, files changed.
+
+- GET `/api/git/contributors` — list canonical contributors
+- GET `/api/git/contributors/unmapped` — alias pairs seen in commits without mapping
+- POST `/api/git/contributors` — body `{ displayName, primaryEmail?, gitlabUserId? }`
+- PUT `/api/git/contributors/:id` — update contributor
+- POST `/api/git/contributors/:id/aliases` — body `{ authorName, authorEmail }`
+- POST `/api/git/contributors/merge` — body `{ targetId, sourceIds: [] }`
+- POST `/api/git/index` — trigger full re-index of active repos
+
+- GET/PUT `/api/admin/settings` — index window, retention, scan interval (admin)
+- GET/PUT `/api/admin/gitlab` — optional GitLab integration (admin)
+- POST `/api/admin/gitlab/test`, POST `/api/admin/gitlab/sync-users`
 
 - GET `/api/git/commits/by-path`
   - Query: `repoPath`, `hash`
@@ -160,5 +170,5 @@ curl -sS 'http://localhost:3201/api/git/diff/1/abc123?filePath=src/app.js' \
 - Dates are ISO-8601 strings (e.g., `2024-01-01` or full timestamps). Ranges are inclusive.
 
 ### Pagination
-- Endpoints that accept `page` and `limit` perform simple in-memory slicing. Metadata is returned on REST endpoints that advertise it.
+- Commit and code-change list endpoints use database `LIMIT/OFFSET` with accurate `total` counts when served from the index.
 

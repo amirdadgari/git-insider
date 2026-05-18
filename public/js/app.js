@@ -117,6 +117,7 @@ class GitInsiderApp {
 
     hideLoginModal() {
         document.getElementById('login-modal').classList.add('hidden');
+        if (window.indexProgressPoller) indexProgressPoller.start();
     }
 
     async loadUserData() {
@@ -193,8 +194,7 @@ class GitInsiderApp {
     handleRouteChange() {
         const page = this.getPageFromUrl();
         // Admin guard
-        if (page === 'admin' && (!this.currentUser || this.currentUser.role !== 'admin')) {
-            // Redirect to dashboard if not allowed
+        if (['admin', 'settings'].includes(page) && (!this.currentUser || this.currentUser.role !== 'admin')) {
             this.navigateTo('dashboard', { updateHash: true });
             return;
         }
@@ -246,6 +246,16 @@ class GitInsiderApp {
                     break;
                 case 'commits':
                     await this.loadRepositories();
+                    if (window.gitAnalytics) await gitAnalytics.loadContributorsDropdown();
+                    break;
+                case 'analytics':
+                    if (window.platformPages) await platformPages.loadAnalyticsPage();
+                    break;
+                case 'contributors':
+                    if (window.platformPages) await platformPages.loadContributorsPage();
+                    break;
+                case 'settings':
+                    if (window.platformPages) await platformPages.loadSettingsPage();
                     break;
                 case 'code-changes':
                     await this.loadRepositories();
@@ -344,24 +354,16 @@ class GitInsiderApp {
             
             // Create stats cards
             const statsGrid = document.getElementById('stats-grid');
-            statsGrid.innerHTML = `
-                <div class="stat-card">
-                    <div class="text-2xl font-bold">${this.repositories.length}</div>
-                    <div class="text-sm opacity-90">Repositories</div>
-                </div>
-                <div class="stat-card">
-                    <div class="text-2xl font-bold" id="total-commits">-</div>
-                    <div class="text-sm opacity-90">Total Commits</div>
-                </div>
-                <div class="stat-card">
-                    <div class="text-2xl font-bold" id="total-contributors">-</div>
-                    <div class="text-sm opacity-90">Contributors</div>
-                </div>
-                <div class="stat-card">
-                    <div class="text-2xl font-bold" id="active-repos">-</div>
-                    <div class="text-sm opacity-90">Active Repos</div>
-                </div>
-            `;
+            statsGrid.innerHTML = ui.statTiles([
+                { label: 'Repositories', value: this.repositories.length, tone: 'text-git-blue' },
+                { label: 'Total Commits', value: '-', tone: 'text-gray-900 dark:text-dark-text' },
+                { label: 'Contributors', value: '-', tone: 'text-git-orange' },
+                { label: 'Active Repos', value: '-', tone: 'text-gray-900 dark:text-dark-text' }
+            ]);
+            ['total-commits', 'total-contributors', 'active-repos'].forEach((id, i) => {
+                const val = statsGrid.children[i + 1]?.querySelector('.stat-tile-value');
+                if (val) val.id = id;
+            });
 
             // Load recent commits
             await this.loadRecentActivity();
@@ -377,12 +379,12 @@ class GitInsiderApp {
             const recentCommitsContainer = document.getElementById('recent-commits');
             
             if (response.commits.length === 0) {
-                recentCommitsContainer.innerHTML = '<p class="text-gray-500 dark:text-dark-text-secondary">No recent commits found</p>';
+                recentCommitsContainer.innerHTML = ui.emptyState('No recent commits found');
                 return;
             }
 
             recentCommitsContainer.innerHTML = response.commits.map(commit => `
-                <div class="commit-card">
+                <div class="list-row">
                     <div class="flex items-start justify-between">
                         <div class="flex-1">
                             <div class="text-sm font-medium text-gray-900 dark:text-dark-text">${commit.message}</div>
@@ -409,6 +411,171 @@ class GitInsiderApp {
         }
     }
 
+    escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    getRepoDisplayLabel(repo) {
+        return repo.displayName || repo.display_name || repo.name || '';
+    }
+
+    renderRepositoryCardsHtml(repos) {
+        if (!Array.isArray(repos) || repos.length === 0) {
+            return ui.emptyState('No repositories found.');
+        }
+        return repos.map(r => {
+            const label = this.escapeHtml(this.getRepoDisplayLabel(r));
+            const repoPath = this.escapeHtml(r.path);
+            const workspaceLine = r.workspaceName
+                ? `<div class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Workspace: ${this.escapeHtml(r.workspaceName)}</div>`
+                : '';
+            const gitlabLine = r.gitlabFullpath || r.scm_fullpath
+                ? `<div class="text-xs text-gray-500 dark:text-dark-text-secondary">GitLab: ${this.escapeHtml(r.gitlabFullpath || r.scm_fullpath)}</div>`
+                : '';
+            const folderHint = r.folderName && r.folderName !== this.getRepoDisplayLabel(r)
+                ? `<div class="text-xs text-gray-400 dark:text-dark-text-secondary">Folder: ${this.escapeHtml(r.folderName)}</div>`
+                : '';
+            const canRename = r.repositoryId != null;
+            const customBadge = r.displayNameCustom
+                ? '<span class="badge badge-gray text-xs">Custom name</span>'
+                : '';
+            return `
+                <div class="list-row" data-repo-path="${repoPath}" data-repository-id="${r.repositoryId ?? ''}">
+                    <div class="flex items-center justify-between gap-4">
+                        <div class="min-w-0 flex-1">
+                            <div class="repo-display-name font-medium text-gray-900 dark:text-dark-text">${label}</div>
+                            <div class="text-sm text-gray-500 dark:text-dark-text-secondary truncate">${repoPath}</div>
+                            ${workspaceLine}
+                            ${gitlabLine}
+                            ${folderHint}
+                        </div>
+                        <div class="flex flex-shrink-0 items-center space-x-2">
+                            ${r.alreadyAdded ? '<span class="badge badge-success">Tracked</span>' : ''}
+                            ${customBadge}
+                            ${canRename ? '<button type="button" class="btn btn-secondary btn-sm" data-action="rename-repo">Rename</button>' : ''}
+                            ${canRename && r.displayNameCustom ? '<button type="button" class="btn btn-secondary btn-sm" data-action="reset-repo-name">Reset</button>' : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    bindRepositoryRenameHandlers(container) {
+        if (!container) return;
+        container.querySelectorAll('[data-action="rename-repo"]').forEach(btn => {
+            btn.addEventListener('click', (e) => this.startRepositoryRename(e.currentTarget));
+        });
+        container.querySelectorAll('[data-action="reset-repo-name"]').forEach(btn => {
+            btn.addEventListener('click', (e) => this.resetRepositoryDisplayName(e.currentTarget));
+        });
+    }
+
+    startRepositoryRename(buttonEl) {
+        const card = buttonEl.closest('[data-repository-id]');
+        if (!card) return;
+        const repositoryId = card.getAttribute('data-repository-id');
+        if (!repositoryId) {
+            this.showError('Repository must be scanned before it can be renamed');
+            return;
+        }
+        const nameEl = card.querySelector('.repo-display-name');
+        if (!nameEl || card.querySelector('.repo-rename-input')) return;
+        const current = nameEl.textContent.trim();
+        nameEl.innerHTML = `
+            <input type="text" class="input repo-rename-input w-full max-w-xs" value="${this.escapeHtml(current)}" />
+            <div class="mt-2 flex gap-2">
+                <button type="button" class="btn btn-primary btn-sm" data-action="save-repo-name">Save</button>
+                <button type="button" class="btn btn-secondary btn-sm" data-action="cancel-repo-name">Cancel</button>
+            </div>
+        `;
+        const input = nameEl.querySelector('.repo-rename-input');
+        input?.focus();
+        input?.select();
+        nameEl.querySelector('[data-action="save-repo-name"]')?.addEventListener('click', () => {
+            this.saveRepositoryDisplayName(repositoryId, input.value.trim(), card);
+        });
+        nameEl.querySelector('[data-action="cancel-repo-name"]')?.addEventListener('click', () => {
+            nameEl.textContent = current;
+        });
+        input?.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') this.saveRepositoryDisplayName(repositoryId, input.value.trim(), card);
+            if (ev.key === 'Escape') nameEl.textContent = current;
+        });
+    }
+
+    async saveRepositoryDisplayName(repositoryId, displayName, cardEl) {
+        if (!displayName) {
+            this.showError('Name cannot be empty');
+            return;
+        }
+        try {
+            await this.apiCall(`/api/git/repositories/${repositoryId}/display-name`, {
+                method: 'PATCH',
+                body: JSON.stringify({ displayName })
+            });
+            this.showSuccess('Repository renamed');
+            if (cardEl) {
+                const nameEl = cardEl.querySelector('.repo-display-name');
+                if (nameEl) nameEl.textContent = displayName;
+                cardEl.setAttribute('data-repository-id', repositoryId);
+            }
+            if (this.currentPage === 'repos') {
+                const selectedIds = Array.from((document.getElementById('repos-workspaces') || {}).selectedOptions || []).map(o => o.value);
+                await this.fetchAndRenderWorkspaceRepos(selectedIds);
+            } else if (this.currentPage === 'workspaces') {
+                const path = cardEl?.getAttribute('data-repo-path');
+                if (path && document.getElementById('scan-results')?.children.length) {
+                    const ws = this.workspaces.find(w => path.startsWith(w.root_path));
+                    if (ws) await this.loadWorkspaceReposIntoScanResults(ws.id);
+                }
+            }
+            await this.loadRepositories();
+            this.updateRepositoryDropdowns();
+        } catch (err) {
+            this.showError(err.message || 'Failed to rename repository');
+        }
+    }
+
+    async resetRepositoryDisplayName(buttonEl) {
+        const card = buttonEl.closest('[data-repository-id]');
+        const repositoryId = card?.getAttribute('data-repository-id');
+        if (!repositoryId) return;
+        try {
+            const updated = await this.apiCall(`/api/git/repositories/${repositoryId}/display-name`, {
+                method: 'PATCH',
+                body: JSON.stringify({ reset: true })
+            });
+            this.showSuccess('Name reset to GitLab config');
+            const label = updated.display_name || updated.name;
+            const nameEl = card.querySelector('.repo-display-name');
+            if (nameEl) nameEl.textContent = label;
+            if (this.currentPage === 'repos') {
+                const selectedIds = Array.from((document.getElementById('repos-workspaces') || {}).selectedOptions || []).map(o => o.value);
+                await this.fetchAndRenderWorkspaceRepos(selectedIds);
+            }
+            await this.loadRepositories();
+            this.updateRepositoryDropdowns();
+        } catch (err) {
+            this.showError(err.message || 'Failed to reset name');
+        }
+    }
+
+    async loadWorkspaceReposIntoScanResults(workspaceId) {
+        const resultsEl = document.getElementById('scan-results');
+        if (!resultsEl) return;
+        try {
+            const data = await this.apiCall(`/api/git/workspaces/repositories?workspaces=${workspaceId}`);
+            resultsEl.innerHTML = this.renderRepositoryCardsHtml(data.repositories || []);
+            this.bindRepositoryRenameHandlers(resultsEl);
+        } catch (err) {
+            console.error('Failed to load workspace repos:', err);
+        }
+    }
+
     async loadWorkspacesPage() {
         try {
             await this.loadWorkspaces();
@@ -417,7 +584,7 @@ class GitInsiderApp {
             const isAdmin = this.currentUser && this.currentUser.role === 'admin';
 
             container.innerHTML = this.workspaces.map(ws => `
-                <div class="commit-card">
+                <div class="list-row">
                     <div class="flex items-center justify-between">
                         <div>
                             <div class="font-medium text-gray-900 dark:text-dark-text">${ws.name || (ws.root_path.split(/\\|\//).pop())}</div>
@@ -425,12 +592,24 @@ class GitInsiderApp {
                             <div class="text-sm text-gray-600 dark:text-dark-text-secondary mt-1">Repos: <span class="font-medium">${ws.repo_count || 0}</span> • Last scanned: ${format(ws.last_scanned_at)}</div>
                         </div>
                         <div class="flex items-center space-x-2">
+                            <button class="btn btn-secondary btn-sm" data-action="view-workspace-repos" data-id="${ws.id}">View repos</button>
                             ${isAdmin ? `<button class="btn btn-danger btn-sm" data-action="remove-workspace" data-id="${ws.id}">Remove</button>` : ''}
-                            <button class="btn btn-secondary btn-sm" data-action="rescan" data-path="${encodeURIComponent(ws.root_path)}">Rescan</button>
+                            <button class="btn btn-secondary btn-sm" data-action="rescan" data-path="${encodeURIComponent(ws.root_path)}" data-workspace-id="${ws.id}">Rescan</button>
                         </div>
                     </div>
                 </div>
             `).join('');
+
+            container.querySelectorAll('button[data-action="view-workspace-repos"]').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const id = e.currentTarget.getAttribute('data-id');
+                    if (!id) return;
+                    const statusEl = document.getElementById('scan-status');
+                    if (statusEl) statusEl.textContent = 'Loading repositories...';
+                    await this.loadWorkspaceReposIntoScanResults(id);
+                    if (statusEl) statusEl.textContent = '';
+                });
+            });
 
             // Bind rescan buttons
             container.querySelectorAll('button[data-action="rescan"]').forEach(btn => {
@@ -446,8 +625,7 @@ class GitInsiderApp {
                         // Update scan results and saved list
                         const statusEl = document.getElementById('scan-status');
                         if (statusEl) statusEl.textContent = `Found ${resp.count} repositories in ${resp.root}`;
-                        const resultsEl = document.getElementById('scan-results');
-                        if (resultsEl) resultsEl.innerHTML = '';
+                        this.renderScanResults(resp.repositories || []);
                         await this.loadWorkspaces();
                         await this.loadWorkspacesPage();
                     } catch (err) {
@@ -546,24 +724,8 @@ class GitInsiderApp {
             const listEl = document.getElementById('repos-results');
             if (countEl) countEl.textContent = `${data.count} repositories`;
             if (listEl) {
-                if (!data.repositories || data.repositories.length === 0) {
-                    listEl.innerHTML = '<p class="text-gray-500 dark:text-dark-text-secondary">No repositories found.</p>';
-                } else {
-                    listEl.innerHTML = data.repositories.map(r => `
-                        <div class="commit-card">
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    <div class="font-medium text-gray-900 dark:text-dark-text">${r.name}</div>
-                                    <div class="text-sm text-gray-500 dark:text-dark-text-secondary">${r.path}</div>
-                                    <div class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Workspace: ${r.workspaceName}</div>
-                                </div>
-                                <div class="flex items-center space-x-2">
-                                    ${r.alreadyAdded ? `<span class="badge badge-success">Already added</span>` : ``}
-                                </div>
-                            </div>
-                        </div>
-                    `).join('');
-                }
+                listEl.innerHTML = this.renderRepositoryCardsHtml(data.repositories || []);
+                this.bindRepositoryRenameHandlers(listEl);
             }
         } catch (err) {
             console.error('Failed to fetch repositories from workspaces:', err);
@@ -609,8 +771,7 @@ class GitInsiderApp {
                     body: JSON.stringify({ path: rootPath, maxDepth, exclude, followSymlinks })
                 });
                 statusEl.textContent = `Found ${resp.count} repositories in ${resp.root}`;
-                if (resultsEl) resultsEl.innerHTML = '';
-                // Refresh saved workspaces list
+                this.renderScanResults(resp.repositories || []);
                 await this.loadWorkspaces();
                 await this.loadWorkspacesPage();
             } catch (err) {
@@ -626,24 +787,8 @@ class GitInsiderApp {
     renderScanResults(repos) {
         const resultsEl = document.getElementById('scan-results');
         if (!resultsEl) return;
-        if (!Array.isArray(repos) || repos.length === 0) {
-            resultsEl.innerHTML = '<p class="text-gray-600 dark:text-dark-text-secondary">No repositories found.</p>';
-            return;
-        }
-
-        resultsEl.innerHTML = repos.map(r => `
-            <div class="commit-card">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <div class="font-medium text-gray-900 dark:text-dark-text">${r.name}</div>
-                        <div class="text-sm text-gray-500 dark:text-dark-text-secondary">${r.path}</div>
-                    </div>
-                    <div class="flex items-center space-x-2">
-                        ${r.alreadyAdded ? `<span class="badge badge-success">Already added</span>` : ``}
-                    </div>
-                </div>
-            </div>
-        `).join('');
+        resultsEl.innerHTML = this.renderRepositoryCardsHtml(repos);
+        this.bindRepositoryRenameHandlers(resultsEl);
     }
 
     async addRepositoryFromScan(repo, buttonEl) {
@@ -707,7 +852,7 @@ class GitInsiderApp {
             ? this.gitUsers.filter(u => [u.name, u.email].some(v => v && v.toLowerCase().includes(q)))
             : this.gitUsers;
         container.innerHTML = users.map(user => `
-            <div class="commit-card">
+            <div class="list-row">
                 <div class="text-center">
                     <div class="text-lg font-medium text-gray-900 dark:text-dark-text">${user.name || '—'}</div>
                     <div class="text-sm text-gray-500 dark:text-dark-text-secondary">${user.email || '—'}</div>
@@ -723,7 +868,7 @@ class GitInsiderApp {
             const container = document.getElementById('tokens-list');
             
             container.innerHTML = this.tokens.map(token => `
-                <div class="commit-card">
+                <div class="list-row">
                     <div class="text-center">
                         <div class="text-lg font-medium text-gray-900 dark:text-dark-text">${token.name}</div>
                         <div class="text-sm text-gray-500 dark:text-dark-text-secondary">${token.value}</div>
@@ -890,7 +1035,7 @@ class GitInsiderApp {
         const methodBadge = (m) => `<span class="badge badge-gray mr-2">${m}</span>`;
         const lock = (a) => a.requireAdmin ? '<span class="badge badge-gray ml-2">Admin</span>' : '';
         listEl.innerHTML = apis.map(a => `
-            <div class="commit-card">
+            <div class="list-row">
                 <div class="flex items-center justify-between">
                     <div>
                         <div class="font-mono text-sm text-gray-700 dark:text-dark-text">${methodBadge(a.method)} ${a.path}</div>
@@ -915,10 +1060,6 @@ class GitInsiderApp {
     }
 
     showApiTryModal(api) {
-        const modal = document.createElement('div');
-        modal.id = 'api-try-modal';
-        modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto';
-
         const pathParams = (api.params || []).filter(p => p.in === 'path');
         const queryParams = (api.params || []).filter(p => p.in !== 'path');
 
@@ -938,13 +1079,16 @@ class GitInsiderApp {
 
         const bodySample = api.body ? JSON.stringify(api.body, null, 2) : '';
 
+        const modal = document.createElement('div');
+        modal.id = 'api-try-modal';
+        modal.className = 'modal-overlay overflow-y-auto';
         modal.innerHTML = `
-            <div class="bg-white dark:bg-dark-bg-secondary rounded-lg p-6 max-w-3xl w-full mx-4 max-h-[85vh] overflow-y-auto">
-                <div class="flex items-center justify-between mb-4 sticky top-0 z-10 bg-white dark:bg-dark-bg-secondary pb-2">
-                    <h2 class="text-xl font-bold text-gray-900 dark:text-dark-text">Try API</h2>
-                    <button onclick="this.closest('#api-try-modal').remove()" class="text-gray-500 hover:text-gray-700">✕</button>
+            <div class="modal-panel modal-panel-wide max-h-[85vh] overflow-y-auto">
+                <div class="modal-header sticky top-0 z-10 bg-white dark:bg-dark-bg-secondary">
+                    <h2 class="modal-title">Try API</h2>
+                    <button type="button" onclick="this.closest('#api-try-modal').remove()" class="modal-close">✕</button>
                 </div>
-
+                <div class="modal-body">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-dark-text mb-1">Method</label>
@@ -1326,6 +1470,8 @@ class GitInsiderApp {
     logout() {
         localStorage.removeItem('authToken');
         this.currentUser = null;
+        if (window.indexProgressPoller) indexProgressPoller.stop();
+        if (window.indexProgressPoller) indexProgressPoller.hideWidget();
         this.showLoginModal();
     }
 }

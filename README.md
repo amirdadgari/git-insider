@@ -11,9 +11,10 @@ Git Insider is an Express-based web app that gives actionable insights into your
 
 ## Tech Stack
 - Node.js, Express
-- SQLite (file DB) via `sqlite3`
+- SQLite (default) or PostgreSQL (`DATABASE_URL`) for metadata and indexed commits
 - GraphQL via `@apollo/server`
 - Tailwind CSS (CLI)
+- Optional GitLab API integration for user sync and contributor mapping
 
 ## Prerequisites
 - Node.js 18+
@@ -35,7 +36,8 @@ From `./.env.example`:
 - `NODE_ENV=development`
 - `PORT=3201`
 - `JWT_SECRET=your_jwt_secret_key_here`
-- `DB_PATH=./database/app.db`
+- `DB_PATH=./database/app.db` (SQLite; omit when using Postgres)
+- `DATABASE_URL=postgresql://user:pass@host:5432/gitinsider` (optional, recommended for production)
 - `ADMIN_USERNAME=admin`
 - `ADMIN_PASSWORD=admin123`
 - `GIT_REPOS_PATH=./repos`
