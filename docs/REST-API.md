@@ -91,7 +91,7 @@ Notes:
   - Paginates server-side by slicing results.
 
 - GET `/api/git/commits`
-  - Query: `user?`, `users=alice,bob`, `startDate?`, `endDate?`, `repositories?=1,2`, `branch?`, `hash?`, `contributorId?`, `message?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `includeChanges?=true|false`, `noCache?=true|false`
+  - Query: `user?`, `users=alice,bob` (comma- or pipe-separated; **OR** match on author name, email, or contributor display name), `startDate?`, `endDate?`, `repositories?=1,2`, `branch?`, `hash?`, `contributorId?`, `message?`, `page=1`, `limit=50`, `includeUnnamed?=true|false`, `includeChanges?=true|false`, `noCache?=true|false`
   - Primary path reads from the indexed commits table (PostgreSQL or SQLite). Older date ranges are indexed on first query. Set `noCache=true` to use live git log instead.
   - Response: `{ commits: Commit[], pagination: { page, limit, total, totalPages } }`
 

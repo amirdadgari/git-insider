@@ -2,6 +2,13 @@ const moment = require('moment');
 const Database = require('../config/database');
 const CommitIndexer = require('./CommitIndexer');
 const ContributorService = require('./ContributorService');
+const {
+    resolveUserFilter,
+    normalizeRangeDates,
+    likeContains,
+    escapeLikePattern
+} = require('../lib/userFilter');
+const { createQueryTimer } = require('../lib/queryTiming');
 
 class AnalyticsQueryService {
     constructor(db = null, gitService = null) {
@@ -42,16 +49,56 @@ class AnalyticsQueryService {
     }
 
     async _ensureIndexed(repos, startDate, endDate) {
-        for (const repo of repos) {
-            await this.indexer.ensureRangeIndexed(repo.id, repo.path, startDate, endDate);
-        }
+        await this.indexer.ensureRangesIndexed(repos, startDate, endDate);
         await this.indexer.touchAccessForRepos(repos.map((r) => r.id));
+    }
+
+    _appendUserIdentifiersClause(clauses, params, userIdentifiers) {
+        if (!userIdentifiers || !userIdentifiers.length) return;
+
+        const emails = [];
+        const others = [];
+        for (const identifier of userIdentifiers) {
+            if (String(identifier).includes('@')) {
+                emails.push(identifier);
+            } else {
+                others.push(identifier);
+            }
+        }
+
+        const parts = [];
+
+        if (emails.length) {
+            const emailPh = emails.map(() => '?').join(',');
+            parts.push(`c.author_email IN (${emailPh})`);
+            params.push(...emails);
+            parts.push(
+                `c.contributor_id IN (SELECT contributor_id FROM contributor_aliases WHERE author_email IN (${emailPh}))`
+            );
+            params.push(...emails);
+        }
+
+        if (others.length) {
+            const like = this.likeOp();
+            for (const identifier of others) {
+                parts.push(`(c.author_name = ? OR c.author_email = ? OR EXISTS (
+                    SELECT 1 FROM contributors ct WHERE ct.id = c.contributor_id AND ct.display_name = ?
+                ) OR EXISTS (
+                    SELECT 1 FROM contributor_aliases ca
+                    WHERE ca.contributor_id = c.contributor_id
+                      AND (ca.author_name = ? OR ca.author_email = ?)
+                ))`);
+                params.push(identifier, identifier, identifier, identifier, identifier);
+            }
+        }
+
+        clauses.push(`(${parts.join(' OR ')})`);
     }
 
     _buildCommitWhere(filters, params) {
         const clauses = ['1=1'];
         const {
-            userPattern,
+            userIdentifiers,
             contributorId,
             contributorIds,
             hash,
@@ -77,25 +124,18 @@ class AnalyticsQueryService {
             params.push(...contributorIds);
         }
 
-        if (userPattern) {
-            const like = this.likeOp();
-            clauses.push(`(c.author_name ${like} ? OR c.author_email ${like} ? OR EXISTS (
-                SELECT 1 FROM contributors ct WHERE ct.id = c.contributor_id AND ct.display_name ${like} ?
-            ))`);
-            const pat = `%${userPattern}%`;
-            params.push(pat, pat, pat);
-        }
+        this._appendUserIdentifiersClause(clauses, params, userIdentifiers);
 
         if (hash) {
             const like = this.likeOp();
-            clauses.push(`c.hash ${like} ?`);
-            params.push(`${hash}%`);
+            clauses.push(`c.hash ${like} ? ESCAPE '\\'`);
+            params.push(`${escapeLikePattern(hash)}%`);
         }
 
         if (message) {
             const like = this.likeOp();
-            clauses.push(`c.message ${like} ?`);
-            params.push(`%${message}%`);
+            clauses.push(`c.message ${like} ? ESCAPE '\\'`);
+            params.push(likeContains(message));
         }
 
         if (startDate) {
@@ -105,7 +145,7 @@ class AnalyticsQueryService {
 
         if (endDate) {
             clauses.push('c.committed_at <= ?');
-            params.push(moment(endDate).endOf('day').toISOString());
+            params.push(endDate);
         }
 
         if (branch) {
@@ -118,14 +158,12 @@ class AnalyticsQueryService {
     }
 
     async queryCommits(options = {}) {
+        const timer = createQueryTimer('queryCommits');
         const {
-            userPattern,
             contributorId,
             contributorIds,
             hash,
             message,
-            startDate,
-            endDate,
             repositoryIds,
             branch,
             includeUnnamed = false,
@@ -135,22 +173,39 @@ class AnalyticsQueryService {
             limit = 50
         } = options;
 
+        const { identifiers: userIdentifiers, gitAuthorPattern } = resolveUserFilter(options);
+        const { startDate, endDate } = normalizeRangeDates(options.startDate, options.endDate);
+        timer.mark('resolveFilters', { users: userIdentifiers.length, includeChanges, noCache });
+
         if (noCache && this.gitService) {
-            return this._fallbackLiveCommits(options);
+            const result = await this._fallbackLiveCommits({
+                ...options,
+                userIdentifiers,
+                gitAuthorPattern,
+                startDate,
+                endDate
+            });
+            timer.finish({ path: 'live', commits: result.commits.length });
+            return result;
         }
 
         const repos = await this._repoFilter(includeUnnamed, repositoryIds);
+        timer.mark('repoFilter', { repos: repos.length });
         if (!repos.length) {
+            timer.finish({ commits: 0, total: 0 });
             return { commits: [], pagination: { page, limit, total: 0, totalPages: 0 } };
         }
 
         const repoIds = repos.map((r) => r.id);
-        await this._ensureIndexed(repos, startDate, endDate);
+        const indexMeta = await this.indexer.ensureRangesIndexed(repos, options.startDate, options.endDate);
+        timer.mark('ensureRangesIndexed', indexMeta);
+        await this.indexer.touchAccessForRepos(repoIds);
+        timer.mark('touchAccessForRepos', { repos: repoIds.length });
 
         const params = [];
         const where = this._buildCommitWhere(
             {
-                userPattern,
+                userIdentifiers,
                 contributorId,
                 contributorIds,
                 hash,
@@ -162,19 +217,18 @@ class AnalyticsQueryService {
             },
             params
         );
+        timer.mark('buildWhere');
 
-        const countRow = await this.db.get(
-            `SELECT COUNT(*) AS total FROM commits c WHERE ${where}`,
-            params
-        );
-        const total = countRow?.total || 0;
         const pg = Math.max(1, page);
         const lm = Math.max(1, limit);
         const offset = (pg - 1) * lm;
 
         const rows = await this.db.all(`
-            SELECT c.*, r.name AS repo_name, r.display_name, r.path AS repo_path,
-                ct.display_name AS contributor_name
+            SELECT c.id, c.repository_id, c.hash, c.author_name, c.author_email,
+                c.contributor_id, c.committed_at, c.message, c.branch,
+                r.name AS repo_name, r.display_name, r.path AS repo_path,
+                ct.display_name AS contributor_name,
+                COUNT(*) OVER() AS _total
             FROM commits c
             JOIN git_repositories r ON r.id = c.repository_id
             LEFT JOIN contributors ct ON ct.id = c.contributor_id
@@ -182,6 +236,9 @@ class AnalyticsQueryService {
             ORDER BY c.committed_at DESC
             LIMIT ? OFFSET ?
         `, [...params, lm, offset]);
+        timer.mark('selectCommits', { rows: rows.length });
+
+        const total = rows.length ? (rows[0]._total || 0) : 0;
 
         const commits = rows.map((row) => ({
             repository: row.display_name || row.repo_name,
@@ -199,24 +256,44 @@ class AnalyticsQueryService {
         }));
 
         if (includeChanges) {
+            timer.mark('includeChangesStart');
+            const commitIds = rows.map((r) => r.id);
+            const placeholders = commitIds.map(() => '?').join(',');
+            const allFiles = await this.db.all(
+                `SELECT commit_id, filename, additions, deletions FROM commit_files WHERE commit_id IN (${placeholders})`,
+                commitIds
+            );
+
+            const filesByCommitId = new Map();
+            for (const f of allFiles) {
+                if (!filesByCommitId.has(f.commit_id)) filesByCommitId.set(f.commit_id, []);
+                filesByCommitId.get(f.commit_id).push({ filename: f.filename, additions: f.additions, deletions: f.deletions });
+            }
+
+            const unindexed = rows.filter((r) => !filesByCommitId.has(r.id));
+            if (unindexed.length) {
+                await Promise.all(
+                    unindexed.map((r) => this.indexer.indexCommitFiles(r.id, r.repo_path, r.hash))
+                );
+                const unindexedIds = unindexed.map((r) => r.id);
+                const newFiles = await this.db.all(
+                    `SELECT commit_id, filename, additions, deletions FROM commit_files WHERE commit_id IN (${unindexedIds.map(() => '?').join(',')})`,
+                    unindexedIds
+                );
+                for (const f of newFiles) {
+                    if (!filesByCommitId.has(f.commit_id)) filesByCommitId.set(f.commit_id, []);
+                    filesByCommitId.get(f.commit_id).push({ filename: f.filename, additions: f.additions, deletions: f.deletions });
+                }
+            }
+
             for (const commit of commits) {
                 const dbRow = rows.find((r) => r.hash === commit.hash);
-                let files = await this.db.all(
-                    'SELECT filename, additions, deletions FROM commit_files WHERE commit_id = ?',
-                    [dbRow.id]
-                );
-                if (!files.length) {
-                    await this.indexer.indexCommitFiles(dbRow.id, commit.repositoryPath, commit.hash);
-                    files = await this.db.all(
-                        'SELECT filename, additions, deletions FROM commit_files WHERE commit_id = ?',
-                        [dbRow.id]
-                    );
-                }
-                commit.files = files;
+                commit.files = filesByCommitId.get(dbRow.id) || [];
             }
+            timer.mark('includeChangesDone', { commits: commits.length });
         }
 
-        return {
+        const result = {
             commits,
             pagination: {
                 page: pg,
@@ -225,6 +302,15 @@ class AnalyticsQueryService {
                 totalPages: Math.ceil(total / lm) || 0
             }
         };
+        timer.finish({
+            path: 'db',
+            repos: repos.length,
+            commits: commits.length,
+            total,
+            page: pg,
+            limit: lm
+        });
+        return result;
     }
 
     async _fallbackLiveCommits(options) {
@@ -232,7 +318,7 @@ class AnalyticsQueryService {
             return { commits: [], pagination: { page: 1, limit: 50, total: 0, totalPages: 0 } };
         }
         const {
-            userPattern,
+            gitAuthorPattern,
             startDate,
             endDate,
             includeUnnamed,
@@ -247,7 +333,7 @@ class AnalyticsQueryService {
         const earlyLimit = pg * lm;
 
         let commits = await this.gitService.getCommitsFromWorkspaces(
-            userPattern,
+            gitAuthorPattern,
             startDate,
             endDate,
             includeUnnamed,

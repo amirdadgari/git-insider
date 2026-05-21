@@ -6,18 +6,13 @@ const { authenticateToken, authenticateApiToken } = require('../middleware/auth'
 
 const gitService = new GitService();
 const ContributorService = require('../services/ContributorService');
+const { parseUserFilter } = require('../lib/userFilter');
 
 gitService.initialize().catch(console.error);
 
 async function ensureAnalytics() {
     if (!gitService.analytics) await gitService.initialize();
     return gitService.analytics;
-}
-
-function parseUserPattern(user, users) {
-    if (user) return user;
-    if (users) return users.split(',').map((u) => u.trim()).join('|');
-    return null;
 }
 
 function parseRepositoryIds(repositories) {
@@ -192,8 +187,10 @@ router.get('/commits', authenticate, async (req, res) => {
         } = req.query;
 
         const analytics = await ensureAnalytics();
+        const { identifiers, gitAuthorPattern } = parseUserFilter({ user, users });
         const result = await analytics.queryCommits({
-            userPattern: parseUserPattern(user, users),
+            userIdentifiers: identifiers,
+            gitAuthorPattern,
             contributorId: contributorId ? parseInt(contributorId, 10) : null,
             hash,
             message,
@@ -260,8 +257,10 @@ router.get('/code-changes', authenticate, async (req, res) => {
         } = req.query;
 
         const analytics = await ensureAnalytics();
+        const { identifiers, gitAuthorPattern } = parseUserFilter({ user, users });
         const result = await analytics.queryCodeChanges({
-            userPattern: parseUserPattern(user, users),
+            userIdentifiers: identifiers,
+            gitAuthorPattern,
             contributorId: contributorId ? parseInt(contributorId, 10) : null,
             hash,
             message,

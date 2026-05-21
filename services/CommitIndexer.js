@@ -139,52 +139,82 @@ class CommitIndexer {
         return { started: true, repos: repos.length };
     }
 
-    async ensureRangeIndexed(repositoryId, repoPath, startDate, endDate) {
-        const coverage = await this.db.get('SELECT * FROM index_coverage WHERE repository_id = ?', [repositoryId]);
-        const start = startDate ? moment(startDate) : moment().subtract(await this.settings.getIndexWindowMonths(), 'months');
+    /**
+     * Check index coverage for many repos in two queries (not N per repo).
+     * @param {{ id: number, path: string, name?: string, display_name?: string }[]} repos
+     */
+    async ensureRangesIndexed(repos, startDate, endDate) {
+        if (!repos.length) return { enqueued: 0 };
+
+        const months = await this.settings.getIndexWindowMonths();
+        const start = startDate ? moment(startDate) : moment().subtract(months, 'months');
         const end = endDate ? moment(endDate) : moment();
 
+        const ids = repos.map((r) => r.id);
+        const placeholders = ids.map(() => '?').join(',');
+        const coverages = await this.db.all(
+            `SELECT * FROM index_coverage WHERE repository_id IN (${placeholders})`,
+            ids
+        );
+        const coverageByRepo = new Map(coverages.map((c) => [c.repository_id, c]));
+
+        const tasks = [];
+        for (const repo of repos) {
+            const coverage = coverageByRepo.get(repo.id);
+            const repoName = repo.display_name || repo.name;
+            const base = {
+                repositoryId: repo.id,
+                repoPath: repo.path,
+                repoName
+            };
+
+            if (!coverage) {
+                tasks.push({
+                    ...base,
+                    startDate: start.format('YYYY-MM-DD'),
+                    endDate: end.format('YYYY-MM-DD')
+                });
+                continue;
+            }
+
+            if (coverage.oldest_indexed_at && start.isBefore(moment(coverage.oldest_indexed_at))) {
+                tasks.push({
+                    ...base,
+                    startDate: start.format('YYYY-MM-DD'),
+                    endDate: moment(coverage.oldest_indexed_at).subtract(1, 'second').format('YYYY-MM-DD')
+                });
+            }
+
+            if (!coverage.newest_indexed_at || end.isAfter(moment(coverage.newest_indexed_at))) {
+                const since = coverage.newest_indexed_at
+                    ? moment(coverage.newest_indexed_at).format('YYYY-MM-DD')
+                    : start.format('YYYY-MM-DD');
+                tasks.push({
+                    ...base,
+                    startDate: since,
+                    endDate: end.format('YYYY-MM-DD')
+                });
+            }
+        }
+
+        if (tasks.length) {
+            this._enqueueTasks(tasks);
+        }
+
+        return { enqueued: tasks.length };
+    }
+
+    async ensureRangeIndexed(repositoryId, repoPath, startDate, endDate) {
         const repo = await this.db.get(
             'SELECT id, path, name, display_name FROM git_repositories WHERE id = ?',
             [repositoryId]
         );
-        const repoName = repo?.display_name || repo?.name;
-
-        if (!coverage) {
-            this._enqueueTasks([{
-                repositoryId,
-                repoPath,
-                repoName,
-                startDate: start.format('YYYY-MM-DD'),
-                endDate: end.format('YYYY-MM-DD')
-            }]);
-            return;
-        }
-
-        if (coverage.oldest_indexed_at && start.isBefore(moment(coverage.oldest_indexed_at))) {
-            this._enqueueTasks([{
-                repositoryId,
-                repoPath,
-                repoName,
-                startDate: start.format('YYYY-MM-DD'),
-                endDate: moment(coverage.oldest_indexed_at).subtract(1, 'second').format('YYYY-MM-DD')
-            }]);
-        }
-
-        if (!coverage.newest_indexed_at || end.isAfter(moment(coverage.newest_indexed_at))) {
-            const since = coverage.newest_indexed_at
-                ? moment(coverage.newest_indexed_at).format('YYYY-MM-DD')
-                : start.format('YYYY-MM-DD');
-            this._enqueueTasks([{
-                repositoryId,
-                repoPath,
-                repoName,
-                startDate: since,
-                endDate: end.format('YYYY-MM-DD')
-            }]);
-        }
-
-        await this.touchAccess(repositoryId);
+        if (!repo) return;
+        await this.ensureRangesIndexed(
+            [{ id: repo.id, path: repoPath || repo.path, name: repo.name, display_name: repo.display_name }],
+            startDate,
+            endDate
+        );
     }
 
     /**
@@ -326,6 +356,8 @@ class CommitIndexer {
             const git = await this._getGit(repoPath);
             const stat = await git.raw(['show', '--numstat', '--format=', hash]);
             const lines = (stat || '').split('\n').filter(Boolean);
+
+            const fileRows = [];
             for (const line of lines) {
                 const parts = line.split('\t');
                 if (parts.length < 3) continue;
@@ -333,9 +365,17 @@ class CommitIndexer {
                 const deletions = parseInt(parts[1], 10) || 0;
                 const filename = parts[2];
                 if (filename === '-') continue;
+                fileRows.push([commitId, filename, additions, deletions]);
+            }
+
+            // Insert in chunks of 200 rows to stay within SQLite's 999-variable limit
+            const CHUNK = 200;
+            for (let i = 0; i < fileRows.length; i += CHUNK) {
+                const chunk = fileRows.slice(i, i + CHUNK);
+                const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(', ');
                 await this.db.run(
-                    'INSERT INTO commit_files (commit_id, filename, additions, deletions) VALUES (?, ?, ?, ?)',
-                    [commitId, filename, additions, deletions]
+                    `INSERT INTO commit_files (commit_id, filename, additions, deletions) VALUES ${placeholders}`,
+                    chunk.flat()
                 );
             }
         } catch (e) {
@@ -390,9 +430,11 @@ class CommitIndexer {
 
     async touchAccessForRepos(repositoryIds) {
         if (!repositoryIds.length) return;
-        for (const id of repositoryIds) {
-            await this.touchAccess(id);
-        }
+        const placeholders = repositoryIds.map(() => '?').join(',');
+        await this.db.run(
+            `UPDATE index_coverage SET last_accessed_at = CURRENT_TIMESTAMP WHERE repository_id IN (${placeholders})`,
+            repositoryIds
+        ).catch(() => {});
     }
 
     async runEviction() {

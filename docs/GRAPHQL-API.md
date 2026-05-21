@@ -42,7 +42,29 @@ Notes:
 - Default index window is 3 months (configurable in Settings). Older ranges are indexed on first query.
 - Set `includeUnnamed: true` to include repos without GitLab `display_name`.
 - Pagination uses database counts with accurate `total` / `totalPages`.
-- Dates are ISO-8601 strings. Ranges are inclusive.
+- Dates are ISO-8601 strings (`YYYY-MM-DD` or full ISO). `startDate` is start-of-day; `endDate` is end-of-day. Ranges are inclusive.
+- `user` or `users: [String!]` match commits where **any** identity matches author name, author email, or linked contributor display name (OR semantics). Prefer `contributorId` / `contributorIds` when you have stable contributor records.
+- `commits` returns `CommitsResult` — always select nested `commits { ... }` and `pagination { ... }`, not commit fields directly on the root `commits` field.
+
+## Server-to-server integration (e.g. Mavara portal)
+
+- Authenticate with `X-API-Key` (create tokens under `/api/auth/tokens` with a JWT session).
+- Example query for multiple mapped handles in a date range:
+
+```bash
+curl -sS http://localhost:3201/api/graphql \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: YOUR_TOKEN_HERE' \
+  --data '{
+    "query": "query($users:[String!]!,$startDate:String!,$endDate:String!,$limit:Int){ commits(users:$users,startDate:$startDate,endDate:$endDate,includeUnnamed:true,limit:$limit){ commits { repository repositoryId hash author authorEmail date message } pagination { total } } }",
+    "variables": {
+      "users": ["alice@company.com", "alice"],
+      "startDate": "2026-05-01",
+      "endDate": "2026-05-21",
+      "limit": 1000
+    }
+  }'
+```
 
 ## Types
 - Repository: { id: ID!, name: String!, path: String!, url: String, description: String }

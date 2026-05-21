@@ -6,18 +6,13 @@ const ContributorService = require('../services/ContributorService');
 const SettingsService = require('../services/SettingsService');
 const GitLabClient = require('../services/GitLabClient');
 const { authenticateToken, authenticateApiToken } = require('../middleware/auth');
+const { parseUserFilter } = require('../lib/userFilter');
 
 const authenticate = (req, res, next) => {
   const apiKey = req.headers['x-api-key'];
   if (apiKey) return authenticateApiToken(req, res, next);
   return authenticateToken(req, res, next);
 };
-
-function userPattern(user, users) {
-  if (user) return user;
-  if (Array.isArray(users) && users.length) return users.join('|');
-  return null;
-}
 
 const typeDefs = /* GraphQL */ `
   type Repository {
@@ -274,9 +269,17 @@ const resolvers = {
     repositories: async (_p, _a, { gitService }) => gitService.getRepositories(),
     repositoryStats: async (_p, { id }, { gitService }) => gitService.getRepositoryStats(id),
     commits: async (_p, args, { gitService }) => {
-      if (!gitService.analytics) await gitService.initialize();
-      return gitService.analytics.queryCommits({
-        userPattern: userPattern(args.user, args.users),
+      const t0 = Date.now();
+      if (!gitService.analytics) {
+        await gitService.initialize();
+        if (process.env.COMMITS_QUERY_TIMING !== 'false' && process.env.COMMITS_QUERY_TIMING !== '0') {
+          console.log(`[commits-query] graphql.initialize ${Date.now() - t0}ms`);
+        }
+      }
+      const { identifiers, gitAuthorPattern } = parseUserFilter({ user: args.user, users: args.users });
+      const result = await gitService.analytics.queryCommits({
+        userIdentifiers: identifiers,
+        gitAuthorPattern,
         contributorId: args.contributorId,
         hash: args.hash,
         message: args.message,
@@ -290,11 +293,17 @@ const resolvers = {
         page: args.page || 1,
         limit: args.limit || 50
       });
+      if (process.env.COMMITS_QUERY_TIMING !== 'false' && process.env.COMMITS_QUERY_TIMING !== '0') {
+        console.log(`[commits-query] graphql.commits total=${Date.now() - t0}ms`);
+      }
+      return result;
     },
     codeChanges: async (_p, args, { gitService }) => {
       if (!gitService.analytics) await gitService.initialize();
+      const { identifiers, gitAuthorPattern } = parseUserFilter({ user: args.user, users: args.users });
       return gitService.analytics.queryCodeChanges({
-        userPattern: userPattern(args.user, args.users),
+        userIdentifiers: identifiers,
+        gitAuthorPattern,
         contributorId: args.contributorId,
         hash: args.hash,
         message: args.message,
