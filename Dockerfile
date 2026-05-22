@@ -6,8 +6,9 @@ WORKDIR /usr/src/app
 # Install OS packages (git for simple-git, ssh for private repos)
 RUN apk add --no-cache git openssh ca-certificates && update-ca-certificates
 
-# Copy package files
+# Copy package files and postinstall script (postinstall runs during npm ci)
 COPY package*.json ./
+COPY scripts/vendor-chart.js ./scripts/
 
 # Install dependencies
 RUN npm ci --only=production
