@@ -84,9 +84,19 @@ class GitAnalytics {
 
         try {
             const response = await app.apiCall(`/api/git/commits?${params}`);
+            this._lastCommitsPage = page;
+            if (response.indexing || response.pagination?.indexing) {
+                this._refreshAfterIndex = true;
+            }
             this.currentCommitsData = response;
             this.displayCommitsResults(response);
             this.displayCommitsPagination(response.pagination);
+            if (response.indexing || response.pagination?.indexing) {
+                const countEl = document.getElementById('commits-count');
+                if (countEl) {
+                    countEl.textContent = `${response.pagination?.total || 0} commits found (indexing in background…)`;
+                }
+            }
         } catch (error) {
             app.showError('Failed to search commits: ' + error.message);
             this.displayCommitsResults({ commits: [], pagination: { total: 0 } });
@@ -222,9 +232,19 @@ class GitAnalytics {
 
         try {
             const response = await app.apiCall(`/api/git/code-changes?${params}`);
+            this._lastChangesPage = page;
+            if (response.indexing || response.pagination?.indexing) {
+                this._refreshAfterIndex = true;
+            }
             this.currentChangesData = response;
             this.displayCodeChangesResults(response);
             this.displayCodeChangesPagination(response.pagination);
+            if (response.indexing || response.pagination?.indexing) {
+                const countEl = document.getElementById('changes-count');
+                if (countEl) {
+                    countEl.textContent = `${response.pagination?.total || 0} code changes found (indexing in background…)`;
+                }
+            }
         } catch (error) {
             app.showError('Failed to search code changes: ' + error.message);
             this.displayCodeChangesResults({ changes: [], pagination: { total: 0 } });
@@ -657,3 +677,4 @@ class GitAnalytics {
 
 // Initialize git analytics
 const gitAnalytics = new GitAnalytics();
+window.gitAnalytics = gitAnalytics;

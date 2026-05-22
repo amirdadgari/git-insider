@@ -10,6 +10,7 @@ const indexProgressPoller = {
     useWebSocket: true,
     pollMs: 10000,
     ringCircumference: 2 * Math.PI * 15,
+    _wasIndexing: false,
 
     start() {
         this.stop();
@@ -127,6 +128,7 @@ const indexProgressPoller = {
         const percent = Math.max(0, Math.min(100, status.percent || 0));
 
         if (show) {
+            this._wasIndexing = true;
             if (this.hideTimeoutId) {
                 clearTimeout(this.hideTimeoutId);
                 this.hideTimeoutId = null;
@@ -168,6 +170,22 @@ const indexProgressPoller = {
             fill.classList.add('bg-green-500');
             tooltip.textContent = status.message || 'Indexing complete';
             widget.setAttribute('aria-label', 'Indexing complete');
+
+            if (this._wasIndexing) {
+                this._wasIndexing = false;
+                const ga = window.gitAnalytics;
+                if (ga && ga._refreshAfterIndex) {
+                    ga._refreshAfterIndex = false;
+                    const commitsPage = ga._lastCommitsPage || 1;
+                    const changesPage = ga._lastChangesPage || 1;
+                    if (typeof ga.searchCommits === 'function') {
+                        ga.searchCommits(commitsPage).catch(() => {});
+                    }
+                    if (typeof ga.searchCodeChanges === 'function') {
+                        ga.searchCodeChanges(changesPage).catch(() => {});
+                    }
+                }
+            }
 
             this.hideTimeoutId = setTimeout(() => this.hideWidget(), 4000);
             return;

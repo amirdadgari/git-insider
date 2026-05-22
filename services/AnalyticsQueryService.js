@@ -11,15 +11,18 @@ const {
 const { createQueryTimer } = require('../lib/queryTiming');
 
 class AnalyticsQueryService {
-    constructor(db = null, gitService = null) {
+    constructor(db = null, gitService = null, indexer = null) {
         this.db = db || new Database();
         this.gitService = gitService;
-        this.indexer = new CommitIndexer(this.db, gitService);
+        this.indexer = indexer || new CommitIndexer(this.db, gitService);
         this.contributors = new ContributorService(this.db);
     }
 
     setGitService(gitService) {
         this.gitService = gitService;
+        if (gitService && gitService.indexer) {
+            this.indexer = gitService.indexer;
+        }
         this.indexer.setGitService(gitService);
     }
 
@@ -193,7 +196,12 @@ class AnalyticsQueryService {
         timer.mark('repoFilter', { repos: repos.length });
         if (!repos.length) {
             timer.finish({ commits: 0, total: 0 });
-            return { commits: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+            return {
+                commits: [],
+                indexing: false,
+                enqueued: 0,
+                pagination: { page, limit, total: 0, totalPages: 0, indexing: false, enqueued: 0 }
+            };
         }
 
         const repoIds = repos.map((r) => r.id);
@@ -225,7 +233,7 @@ class AnalyticsQueryService {
 
         const rows = await this.db.all(`
             SELECT c.id, c.repository_id, c.hash, c.author_name, c.author_email,
-                c.contributor_id, c.committed_at, c.message, c.branch,
+                c.contributor_id, c.committed_at, c.message, c.branch, c.files_indexed_at,
                 r.name AS repo_name, r.display_name, r.path AS repo_path,
                 ct.display_name AS contributor_name,
                 COUNT(*) OVER() AS _total
@@ -241,6 +249,7 @@ class AnalyticsQueryService {
         const total = rows.length ? (rows[0]._total || 0) : 0;
 
         const commits = rows.map((row) => ({
+            id: row.id,
             repository: row.display_name || row.repo_name,
             repositoryId: row.repository_id,
             repositoryPath: row.repo_path,
@@ -259,10 +268,12 @@ class AnalyticsQueryService {
             timer.mark('includeChangesStart');
             const commitIds = rows.map((r) => r.id);
             const placeholders = commitIds.map(() => '?').join(',');
-            const allFiles = await this.db.all(
-                `SELECT commit_id, filename, additions, deletions FROM commit_files WHERE commit_id IN (${placeholders})`,
-                commitIds
-            );
+            const allFiles = commitIds.length
+                ? await this.db.all(
+                    `SELECT commit_id, filename, additions, deletions FROM commit_files WHERE commit_id IN (${placeholders})`,
+                    commitIds
+                )
+                : [];
 
             const filesByCommitId = new Map();
             for (const f of allFiles) {
@@ -270,7 +281,7 @@ class AnalyticsQueryService {
                 filesByCommitId.get(f.commit_id).push({ filename: f.filename, additions: f.additions, deletions: f.deletions });
             }
 
-            const unindexed = rows.filter((r) => !filesByCommitId.has(r.id));
+            const unindexed = rows.filter((r) => !r.files_indexed_at);
             if (unindexed.length) {
                 await Promise.all(
                     unindexed.map((r) => this.indexer.indexCommitFiles(r.id, r.repo_path, r.hash))
@@ -287,19 +298,23 @@ class AnalyticsQueryService {
             }
 
             for (const commit of commits) {
-                const dbRow = rows.find((r) => r.hash === commit.hash);
-                commit.files = filesByCommitId.get(dbRow.id) || [];
+                commit.files = filesByCommitId.get(commit.id) || [];
             }
             timer.mark('includeChangesDone', { commits: commits.length });
         }
 
+        const indexing = (indexMeta.enqueued || 0) > 0;
         const result = {
             commits,
+            indexing,
+            enqueued: indexMeta.enqueued || 0,
             pagination: {
                 page: pg,
                 limit: lm,
                 total,
-                totalPages: Math.ceil(total / lm) || 0
+                totalPages: Math.ceil(total / lm) || 0,
+                indexing,
+                enqueued: indexMeta.enqueued || 0
             }
         };
         timer.finish({
@@ -315,7 +330,12 @@ class AnalyticsQueryService {
 
     async _fallbackLiveCommits(options) {
         if (!this.gitService) {
-            return { commits: [], pagination: { page: 1, limit: 50, total: 0, totalPages: 0 } };
+            return {
+                commits: [],
+                indexing: false,
+                enqueued: 0,
+                pagination: { page: 1, limit: 50, total: 0, totalPages: 0, indexing: false, enqueued: 0 }
+            };
         }
         const {
             gitAuthorPattern,
@@ -340,13 +360,23 @@ class AnalyticsQueryService {
             { limit: earlyLimit, noCache: true, branch, includeChanges }
         );
 
-        const total = commits.length;
+        const cappedTotal = commits.length;
         const offset = (pg - 1) * lm;
         commits = commits.slice(offset, offset + lm);
 
         return {
             commits,
-            pagination: { page: pg, limit: lm, total, totalPages: Math.ceil(total / lm) || 0 }
+            indexing: false,
+            enqueued: 0,
+            pagination: {
+                page: pg,
+                limit: lm,
+                total: cappedTotal,
+                totalPages: Math.ceil(cappedTotal / lm) || 0,
+                indexing: false,
+                enqueued: 0,
+                capped: true
+            }
         };
     }
 

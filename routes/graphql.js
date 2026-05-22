@@ -64,16 +64,23 @@ const typeDefs = /* GraphQL */ `
     limit: Int!
     total: Int!
     totalPages: Int!
+    indexing: Boolean
+    enqueued: Int
+    capped: Boolean
   }
 
   type CommitsResult {
     commits: [Commit!]!
     pagination: Pagination!
+    indexing: Boolean
+    enqueued: Int
   }
 
   type CodeChangesResult {
     changes: [CodeChange!]!
     pagination: Pagination!
+    indexing: Boolean
+    enqueued: Int
   }
 
   type CommitSummary {

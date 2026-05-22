@@ -41,6 +41,34 @@ async function runMigrations(db) {
     }
 
     await ensureRepoColumns(db);
+    await ensureFilesIndexedAt(db);
+}
+
+async function ensureFilesIndexedAt(db) {
+    const hasColumn = await commitsHasColumn(db, 'files_indexed_at');
+    if (!hasColumn) {
+        const type = db.dialect === 'postgres' ? 'TIMESTAMPTZ' : 'DATETIME';
+        await db.run(`ALTER TABLE commits ADD COLUMN files_indexed_at ${type}`);
+    }
+    await db.run(`
+        UPDATE commits
+        SET files_indexed_at = CURRENT_TIMESTAMP
+        WHERE files_indexed_at IS NULL
+          AND id IN (SELECT DISTINCT commit_id FROM commit_files)
+    `);
+}
+
+async function commitsHasColumn(db, name) {
+    if (db.dialect === 'postgres') {
+        const row = await db.get(
+            `SELECT 1 AS ok FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'commits' AND column_name = ?`,
+            [name]
+        );
+        return !!row;
+    }
+    const columns = await db.all("PRAGMA table_info('commits')");
+    return columns.some((c) => c.name === name);
 }
 
 async function ensureRepoColumns(db) {

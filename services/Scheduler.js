@@ -4,16 +4,17 @@ try {
 } catch {
     cron = null;
 }
-const Database = require('../config/database');
 const SettingsService = require('./SettingsService');
-const CommitIndexer = require('./CommitIndexer');
 
 class Scheduler {
     constructor(gitService) {
         this.gitService = gitService;
         this.db = gitService.db;
         this.settings = new SettingsService(this.db);
-        this.indexer = new CommitIndexer(this.db, gitService);
+        if (!gitService.indexer) {
+            throw new Error('GitService must be initialized before Scheduler');
+        }
+        this.indexer = gitService.indexer;
         this.workspaceTask = null;
         this.evictionTask = null;
     }
@@ -33,7 +34,7 @@ class Scheduler {
                 console.error('[scheduler] Eviction failed:', e.message);
             }
         });
-        console.log('[scheduler] Started (workspace scan + daily eviction)');
+        console.log('[scheduler] Started (workspace scan + daily index-window eviction)');
     }
 
     _startIntervalFallback() {

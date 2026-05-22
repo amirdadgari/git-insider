@@ -1,0 +1,1 @@
+-- Applied idempotently via ensureFilesIndexedAt() in config/database/migrate.js

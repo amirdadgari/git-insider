@@ -583,11 +583,7 @@
                     <div>
                         <label class="form-label">Index window (months)</label>
                         <input type="number" id="setting-index-window" class="input" min="1" max="24">
-                    </div>
-                    <div>
-                        <label class="form-label">Retention idle days</label>
-                        <input type="number" id="setting-retention-days" class="input" min="1">
-                        <p class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Remove indexed data not accessed within this many days</p>
+                        <p class="text-xs text-gray-500 dark:text-dark-text-secondary mt-1">Index and query commits within this range. Daily eviction removes older indexed commits only.</p>
                     </div>
                     <div>
                         <label class="form-label">Workspace scan interval (minutes)</label>

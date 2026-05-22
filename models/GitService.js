@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const moment = require('moment');
 const Database = require('../config/database');
+const { parseCommitLogLine } = require('../lib/gitLogParse');
 
 class GitService {
     constructor() {
@@ -410,8 +411,8 @@ class GitService {
         await this.loadRepositories();
         const AnalyticsQueryService = require('../services/AnalyticsQueryService');
         const CommitIndexer = require('../services/CommitIndexer');
-        this.analytics = new AnalyticsQueryService(this.db, this);
         this.indexer = new CommitIndexer(this.db, this);
+        this.analytics = new AnalyticsQueryService(this.db, this, this.indexer);
     }
 
     async loadRepositories() {
@@ -597,11 +598,11 @@ class GitService {
 
                 const simpleGitOptions = {
                     format: format,
-                    '--author': userPattern,
                     '--since': startDate,
                     '--until': endDate,
                     '--all': true
-                }
+                };
+                if (userPattern) simpleGitOptions['--author'] = userPattern;
                 const log = await repo.git.log(simpleGitOptions);
                 const results = [];
                 for (const commit of log.all) {
@@ -763,13 +764,6 @@ class GitService {
                                 const re = new RegExp(userPattern);
                                 if (!re.test(String(c.author)) && !re.test(String(c.authorEmail))) continue;
                             }
-                            if(includeChanges) {
-                                const git = await this._getGitForPath(c.repositoryPath);
-                                c.changes = await git.show([c.hash, '--format=fuller']);
-                            }else {
-                                c.changes = null;
-                            }
-
                             commits.push(c);
                         }
                         // Apply soft perRepoMax only as a global limiter after sorting below
@@ -836,16 +830,10 @@ class GitService {
                                         }
                                     }
 
-                                    let changes = null;
-                                    if(includeChanges){
-                                        changes = await git.show([commit.hash, '--format=fuller']);
-                                    }
-                                    
                                     results.push({
                                         repository: repoInfo.displayName || repoInfo.name,
                                         repositoryId: repoInfo.repositoryId ?? null,
-                                        // repositoryPath: repoInfo.path,
-                                        changes: changes,
+                                        repositoryPath: repoInfo.path,
                                         hash: commit.hash,
                                         author: commit.author || commit.author_name,
                                         authorEmail: commit.authorEmail || commit.author_email,
@@ -972,30 +960,27 @@ class GitService {
                 const hashes = Array.from(group.hashes);
                 if (!hashes.length) return;
 
-                // Use git log to output only numstat lines grouped by commit marker
-                const args = ['log', '--numstat', '--pretty=format:__COMMIT__%H', ...hashes];
-                const output = await git.raw(args);
                 const filesByHash = new Map();
-                let currentHash = null;
-                for (const line of output.split('\n')) {
-                    if (line.startsWith('__COMMIT__')) {
-                        currentHash = line.replace('__COMMIT__', '').trim();
-                        if (!filesByHash.has(currentHash)) filesByHash.set(currentHash, []);
-                        continue;
-                    }
-                    if (!currentHash) continue;
-                    if (/^\d+\s+\d+\s+/.test(line)) {
-                        const parts = line.split('\t');
-                        if (parts.length >= 3) {
-                            const additions = parseInt(parts[0]) || 0;
-                            const deletions = parseInt(parts[1]) || 0;
+                for (const hash of hashes) {
+                    try {
+                        const stat = await git.raw(['show', '--numstat', '--format=', hash]);
+                        const files = [];
+                        for (const line of (stat || '').split('\n').filter(Boolean)) {
+                            const parts = line.split('\t');
+                            if (parts.length < 3) continue;
+                            const additions = parseInt(parts[0], 10) || 0;
+                            const deletions = parseInt(parts[1], 10) || 0;
                             const filename = parts.slice(2).join('\t');
-                            filesByHash.get(currentHash).push({ filename, additions, deletions });
+                            if (filename === '-') continue;
+                            files.push({ filename, additions, deletions });
                         }
+                        filesByHash.set(hash, files);
+                    } catch (showErr) {
+                        console.warn(`Failed to get file stats for ${hash}:`, showErr.message);
+                        filesByHash.set(hash, []);
                     }
                 }
 
-                // Attach to original commit objects
                 for (const [hash, files] of filesByHash.entries()) {
                     const idx = group.indexByHash.get(hash);
                     if (typeof idx === 'number') {
@@ -1073,30 +1058,33 @@ class GitService {
                 let currentCommit = null;
                 
                 for (const line of lines) {
-                    if (line.includes('|') && !line.match(/^\d+\s+\d+\s+/)) {
-                        const [hash, author, email, date, message] = line.split('|');
+                    const parsed = parseCommitLogLine(line);
+                    if (parsed) {
                         currentCommit = {
                             repository: repo.display_name || repo.name,
                             repositoryId: repoId,
-                            hash,
-                            author,
-                            email,
-                            date,
-                            message,
+                            hash: parsed.hash,
+                            author: parsed.author,
+                            email: parsed.email,
+                            date: parsed.date,
+                            message: parsed.message,
                             files: []
                         };
-                        const cDate = new Date(date);
+                        const cDate = new Date(parsed.date);
                         if ((startBound && cDate < startBound) || (endBound && cDate > endBound)) {
-                            currentCommit = null; // skip this commit entirely
+                            currentCommit = null;
                         } else {
                             changes.push(currentCommit);
                         }
                     } else if (line.match(/^\d+\s+\d+\s+/) && currentCommit) {
-                        const [additions, deletions, filename] = line.split('\t');
+                        const parts = line.split('\t');
+                        const additions = parts[0];
+                        const deletions = parts[1];
+                        const filename = parts.slice(2).join('\t');
                         currentCommit.files.push({
                             filename,
-                            additions: parseInt(additions) || 0,
-                            deletions: parseInt(deletions) || 0
+                            additions: parseInt(additions, 10) || 0,
+                            deletions: parseInt(deletions, 10) || 0
                         });
                     }
                 }
@@ -1180,29 +1168,29 @@ class GitService {
 
                             let currentCommit = null;
                             for (const line of lines) {
-                                if (line.includes('|') && !line.match(/^\d+\s+\d+\s+/)) {
-                                    const [hash, author, email, atSeconds, message] = line.split('|');
-                                    let ts = Number(atSeconds);
+                                const parsed = parseCommitLogLine(line);
+                                if (parsed) {
+                                    let ts = Number(parsed.date);
                                     if (!Number.isFinite(ts)) {
-                                        const parsed = Date.parse(atSeconds);
-                                        ts = Number.isFinite(parsed) ? parsed : NaN;
+                                        const parsedMs = Date.parse(parsed.date);
+                                        ts = Number.isFinite(parsedMs) ? parsedMs : NaN;
                                     } else {
                                         ts = ts * 1000;
                                     }
                                     const dateObj = new Date(ts);
                                     if (isNaN(dateObj.getTime())) {
-                                        console.warn(`Skipping commit with invalid date in ${repoInfo.path}: ${hash} (${atSeconds})`);
+                                        console.warn(`Skipping commit with invalid date in ${repoInfo.path}: ${parsed.hash} (${parsed.date})`);
                                         continue;
                                     }
                                     const iso = dateObj.toISOString();
                                     currentCommit = {
                                         repository: repoInfo.displayName || repoInfo.name,
                                         repositoryId: repoInfo.repositoryId ?? null,
-                                        hash,
-                                        author,
-                                        email,
+                                        hash: parsed.hash,
+                                        author: parsed.author,
+                                        email: parsed.email,
                                         date: iso,
-                                        message,
+                                        message: parsed.message,
                                         files: []
                                     };
                                     const cDate = dateObj;
@@ -1212,11 +1200,12 @@ class GitService {
                                         changes.push(currentCommit);
                                     }
                                 } else if (line.match(/^\d+\s+\d+\s+/) && currentCommit) {
-                                    const [additions, deletions, filename] = line.split('\t');
+                                    const parts = line.split('\t');
+                                    const filename = parts.slice(2).join('\t');
                                     currentCommit.files.push({
                                         filename,
-                                        additions: parseInt(additions) || 0,
-                                        deletions: parseInt(deletions) || 0
+                                        additions: parseInt(parts[0], 10) || 0,
+                                        deletions: parseInt(parts[1], 10) || 0
                                     });
                                 }
                             }
@@ -1267,25 +1256,26 @@ class GitService {
         let currentCommit = null;
 
         for (const line of lines) {
-            if (line.includes('|') && !line.match(/^\d+\s+\d+\s+/)) {
-                const [hash, author, email, date, message] = line.split('|');
+            const parsed = parseCommitLogLine(line);
+            if (parsed) {
                 currentCommit = {
                     repository: repoName,
                     repositoryId: repoId,
-                    hash,
-                    author,
-                    email,
-                    date,
-                    message,
+                    hash: parsed.hash,
+                    author: parsed.author,
+                    email: parsed.email,
+                    date: parsed.date,
+                    message: parsed.message,
                     files: []
                 };
                 changes.push(currentCommit);
             } else if (line.match(/^\d+\s+\d+\s+/) && currentCommit) {
-                const [additions, deletions, filename] = line.split('\t');
+                const parts = line.split('\t');
+                const filename = parts.slice(2).join('\t');
                 currentCommit.files.push({
                     filename,
-                    additions: parseInt(additions) || 0,
-                    deletions: parseInt(deletions) || 0
+                    additions: parseInt(parts[0], 10) || 0,
+                    deletions: parseInt(parts[1], 10) || 0
                 });
             }
         }

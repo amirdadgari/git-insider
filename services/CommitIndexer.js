@@ -15,6 +15,7 @@ class CommitIndexer {
         this.gitService = gitService;
         this.gitConcurrency = Math.max(1, parseInt(process.env.GIT_CONCURRENCY || '8', 10));
         this.excludeMerges = String(process.env.GIT_EXCLUDE_MERGES || 'true').toLowerCase() === 'true';
+        this.indexCommitBranch = String(process.env.INDEX_COMMIT_BRANCH || 'true').toLowerCase() === 'true';
         this._jobPromise = null;
         this._pendingQueue = [];
     }
@@ -147,8 +148,10 @@ class CommitIndexer {
         if (!repos.length) return { enqueued: 0 };
 
         const months = await this.settings.getIndexWindowMonths();
-        const start = startDate ? moment(startDate) : moment().subtract(months, 'months');
-        const end = endDate ? moment(endDate) : moment();
+        const start = startDate
+            ? moment(startDate).startOf('day')
+            : moment().subtract(months, 'months').startOf('day');
+        const end = endDate ? moment(endDate).endOf('day') : moment();
 
         const ids = repos.map((r) => r.id);
         const placeholders = ids.map(() => '?').join(',');
@@ -171,8 +174,8 @@ class CommitIndexer {
             if (!coverage) {
                 tasks.push({
                     ...base,
-                    startDate: start.format('YYYY-MM-DD'),
-                    endDate: end.format('YYYY-MM-DD')
+                    startDate: start.toISOString(),
+                    endDate: end.toISOString()
                 });
                 continue;
             }
@@ -180,19 +183,19 @@ class CommitIndexer {
             if (coverage.oldest_indexed_at && start.isBefore(moment(coverage.oldest_indexed_at))) {
                 tasks.push({
                     ...base,
-                    startDate: start.format('YYYY-MM-DD'),
-                    endDate: moment(coverage.oldest_indexed_at).subtract(1, 'second').format('YYYY-MM-DD')
+                    startDate: start.toISOString(),
+                    endDate: moment(coverage.oldest_indexed_at).subtract(1, 'second').toISOString()
                 });
             }
 
             if (!coverage.newest_indexed_at || end.isAfter(moment(coverage.newest_indexed_at))) {
                 const since = coverage.newest_indexed_at
-                    ? moment(coverage.newest_indexed_at).format('YYYY-MM-DD')
-                    : start.format('YYYY-MM-DD');
+                    ? moment(coverage.newest_indexed_at).toISOString()
+                    : start.toISOString();
                 tasks.push({
                     ...base,
                     startDate: since,
-                    endDate: end.format('YYYY-MM-DD')
+                    endDate: end.toISOString()
                 });
             }
         }
@@ -230,6 +233,7 @@ class CommitIndexer {
 
             while (until.isAfter(since)) {
                 const logOpts = {
+                    '--all': true,
                     '--since': since.toISOString(),
                     '--until': until.toISOString(),
                     '--max-count': BATCH_SIZE,
@@ -239,7 +243,8 @@ class CommitIndexer {
                         authorEmail: '%ae',
                         date: '%aI',
                         message: '%s',
-                        body: '%b'
+                        body: '%b',
+                        refs: '%D'
                     }
                 };
                 if (this.excludeMerges) {
@@ -262,7 +267,7 @@ class CommitIndexer {
                 let batchNew = 0;
                 let batchSkipped = 0;
                 for (const entry of commits) {
-                    const r = await this._upsertCommit(repositoryId, entry);
+                    const r = await this._upsertCommit(repositoryId, entry, repoPath);
                     if (r.inserted) {
                         batchNew += 1;
                         if (r.id) {
@@ -300,11 +305,33 @@ class CommitIndexer {
         }
     }
 
-    async _upsertCommit(repositoryId, entry) {
+    async _resolveBranchForCommit(repoPath, entry) {
+        if (entry.refs && this.gitService && typeof this.gitService.extractBranchFromRefs === 'function') {
+            const fromRefs = this.gitService.extractBranchFromRefs(entry.refs);
+            if (fromRefs) return fromRefs;
+        }
+        try {
+            const git = await this._getGit(repoPath);
+            const nameRevResult = await git.raw(['name-rev', '--name-only', '--refs=refs/heads/*', entry.hash]);
+            if (nameRevResult && nameRevResult.trim() !== 'undefined') {
+                return nameRevResult.trim().replace(/[~^]\d*.*$/, '');
+            }
+        } catch (_) {
+            // ignore name-rev errors
+        }
+        return null;
+    }
+
+    async _upsertCommit(repositoryId, entry, repoPath) {
         const contributorId = await this.contributors.ensureAliasFromCommit(
             entry.author,
             entry.authorEmail
         );
+
+        let branch = null;
+        if (this.indexCommitBranch && repoPath) {
+            branch = await this._resolveBranchForCommit(repoPath, entry);
+        }
 
         const existing = await this.db.get(
             'SELECT id FROM commits WHERE repository_id = ? AND hash = ?',
@@ -313,16 +340,17 @@ class CommitIndexer {
 
         if (existing) {
             await this.db.run(
-                'UPDATE commits SET author_name = ?, author_email = ?, contributor_id = COALESCE(?, contributor_id), message = ?, committed_at = ? WHERE id = ?',
-                [entry.author, entry.authorEmail, contributorId, entry.message, entry.date, existing.id]
+                `UPDATE commits SET author_name = ?, author_email = ?, contributor_id = COALESCE(?, contributor_id),
+                    message = ?, committed_at = ?, branch = COALESCE(?, branch) WHERE id = ?`,
+                [entry.author, entry.authorEmail, contributorId, entry.message, entry.date, branch, existing.id]
             );
             return { inserted: false };
         }
 
         const result = await this.db.run(
-            `INSERT INTO commits (repository_id, hash, author_name, author_email, contributor_id, committed_at, message, is_merge)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
-            [repositoryId, entry.hash, entry.author, entry.authorEmail, contributorId, entry.date, entry.message]
+            `INSERT INTO commits (repository_id, hash, author_name, author_email, contributor_id, committed_at, message, branch, is_merge)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            [repositoryId, entry.hash, entry.author, entry.authorEmail, contributorId, entry.date, entry.message, branch]
         );
         return { inserted: true, id: result.id };
     }
@@ -336,7 +364,7 @@ class CommitIndexer {
                 WHERE c.repository_id = ?
                   AND c.committed_at >= ?
                   AND c.committed_at <= ?
-                  AND NOT EXISTS (SELECT 1 FROM commit_files cf WHERE cf.commit_id = c.id)
+                  AND c.files_indexed_at IS NULL
                 ORDER BY c.committed_at DESC
                 LIMIT ?
             `, [repositoryId, sinceIso, untilIso || moment().toISOString(), BATCH]);
@@ -349,8 +377,11 @@ class CommitIndexer {
     }
 
     async indexCommitFiles(commitId, repoPath, hash) {
-        const existing = await this.db.get('SELECT COUNT(*) AS c FROM commit_files WHERE commit_id = ?', [commitId]);
-        if (existing && existing.c > 0) return;
+        const existing = await this.db.get(
+            'SELECT files_indexed_at FROM commits WHERE id = ?',
+            [commitId]
+        );
+        if (existing && existing.files_indexed_at) return;
 
         try {
             const git = await this._getGit(repoPath);
@@ -378,6 +409,11 @@ class CommitIndexer {
                     chunk.flat()
                 );
             }
+
+            await this.db.run(
+                'UPDATE commits SET files_indexed_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [commitId]
+            );
         } catch (e) {
             console.warn(`Failed to index files for commit ${hash}:`, e.message);
         }
@@ -437,31 +473,69 @@ class CommitIndexer {
         ).catch(() => {});
     }
 
+    /**
+     * Remove indexed commits older than the configured index window.
+     * Commits within the window are kept regardless of last_accessed_at.
+     */
     async runEviction() {
-        const days = await this.settings.getRetentionIdleDays();
-        const cutoff = moment().subtract(days, 'days').toISOString();
+        const months = await this.settings.getIndexWindowMonths();
+        const windowCutoff = moment().subtract(months, 'months').toISOString();
 
-        const stale = await this.db.all(`
-            SELECT repository_id FROM index_coverage
-            WHERE last_accessed_at < ?
-        `, [cutoff]);
+        const affected = await this.db.all(
+            'SELECT DISTINCT repository_id FROM commits WHERE committed_at < ?',
+            [windowCutoff]
+        );
 
-        let deleted = 0;
-        for (const row of stale) {
-            const commits = await this.db.all('SELECT id FROM commits WHERE repository_id = ?', [row.repository_id]);
-            for (const c of commits) {
-                await this.db.run('DELETE FROM commit_files WHERE commit_id = ?', [c.id]);
-            }
-            const result = await this.db.run('DELETE FROM commits WHERE repository_id = ?', [row.repository_id]);
-            deleted += result.changes || 0;
-            await this.db.run('DELETE FROM index_coverage WHERE repository_id = ?', [row.repository_id]);
+        const result = await this.db.run(
+            'DELETE FROM commits WHERE committed_at < ?',
+            [windowCutoff]
+        );
+        const deletedCommits = result.changes || 0;
+
+        for (const row of affected) {
+            await this._recomputeCoverageAfterEviction(row.repository_id);
         }
 
         await this.db.run(
             'UPDATE scheduler_status SET last_eviction_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = 1'
         ).catch(() => {});
 
-        return { deletedRepos: stale.length, deletedCommits: deleted };
+        return {
+            deletedCommits,
+            windowCutoff,
+            reposUpdated: affected.length
+        };
+    }
+
+    async _recomputeCoverageAfterEviction(repositoryId) {
+        const agg = await this.db.get(`
+            SELECT MIN(committed_at) AS oldest, MAX(committed_at) AS newest, COUNT(*) AS c
+            FROM commits WHERE repository_id = ?
+        `, [repositoryId]);
+
+        if (!agg || !agg.c) {
+            await this.db.run('DELETE FROM index_coverage WHERE repository_id = ?', [repositoryId]);
+            return;
+        }
+
+        const existing = await this.db.get(
+            'SELECT repository_id FROM index_coverage WHERE repository_id = ?',
+            [repositoryId]
+        );
+        if (existing) {
+            await this.db.run(`
+                UPDATE index_coverage SET
+                    oldest_indexed_at = ?,
+                    newest_indexed_at = ?,
+                    last_indexed_at = CURRENT_TIMESTAMP
+                WHERE repository_id = ?
+            `, [agg.oldest, agg.newest, repositoryId]);
+        } else {
+            await this.db.run(`
+                INSERT INTO index_coverage (repository_id, oldest_indexed_at, newest_indexed_at, last_indexed_at, last_accessed_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `, [repositoryId, agg.oldest, agg.newest]);
+        }
     }
 }
 

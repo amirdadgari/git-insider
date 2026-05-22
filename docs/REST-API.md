@@ -107,7 +107,7 @@ Notes:
 - POST `/api/git/contributors/merge` — body `{ targetId, sourceIds: [] }`
 - POST `/api/git/index` — trigger full re-index of active repos
 
-- GET/PUT `/api/admin/settings` — index window, retention, scan interval (admin)
+- GET/PUT `/api/admin/settings` — index window (months), scan interval (admin). Daily eviction deletes indexed commits older than the index window.
 - GET/PUT `/api/admin/gitlab` — optional GitLab integration (admin)
 - POST `/api/admin/gitlab/test`, POST `/api/admin/gitlab/sync-users`
 

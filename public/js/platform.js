@@ -29,7 +29,6 @@ const platformPages = {
         const data = await app.apiCall('/api/admin/settings');
         const s = data.settings || {};
         document.getElementById('setting-index-window').value = s.index_window_months || '3';
-        document.getElementById('setting-retention-days').value = s.retention_idle_days || '7';
         document.getElementById('setting-scan-interval').value = s.workspace_scan_interval_minutes || '30';
         if (data.scheduler) {
             document.getElementById('scheduler-status').textContent =
@@ -58,7 +57,6 @@ const platformPages = {
                     method: 'PUT',
                     body: JSON.stringify({
                         index_window_months: document.getElementById('setting-index-window').value,
-                        retention_idle_days: document.getElementById('setting-retention-days').value,
                         workspace_scan_interval_minutes: document.getElementById('setting-scan-interval').value
                     })
                 });
